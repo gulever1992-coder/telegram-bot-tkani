@@ -24,8 +24,13 @@ dp = Dispatcher()
 # Render задаёт RENDER_EXTERNAL_URL и PORT автоматически — по их наличию бот
 # понимает, что работает в облаке, и переключается с polling на webhook,
 # чтобы отвечать на HTTP-пинги (не даёт бесплатному сервису "уснуть").
-RENDER_EXTERNAL_URL = os.getenv("RENDER_EXTERNAL_URL")
-PORT = int(os.getenv("PORT", "10000"))
+_koyeb_domain = os.getenv("KOYEB_PUBLIC_DOMAIN")
+RENDER_EXTERNAL_URL = (
+    os.getenv("WEBHOOK_BASE_URL")
+    or os.getenv("RENDER_EXTERNAL_URL")
+    or (f"https://{_koyeb_domain}" if _koyeb_domain else None)
+)
+PORT = int(os.getenv("PORT", "8000"))
 WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET", "local-secret")
 WEBHOOK_PATH = f"/webhook/{WEBHOOK_SECRET}"
 
