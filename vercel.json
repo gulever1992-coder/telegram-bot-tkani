@@ -1,0 +1,11 @@
+{
+  "functions": {
+    "api/*.py": {
+      "maxDuration": 60,
+      "includeFiles": "{core.py,config.py,keyboards.py,utils/**,fonts/**}"
+    }
+  },
+  "rewrites": [
+    { "source": "/", "destination": "/api/webhook" }
+  ]
+}
