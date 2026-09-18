@@ -1,0 +1,22 @@
+services:
+  - type: web
+    name: telegram-bot-tkani
+    env: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: python bot.py
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.9
+      - key: WEBHOOK_SECRET
+        generateValue: true
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: FABRICS_CSV_URL
+        value: https://docs.google.com/spreadsheets/d/1emQk0xq3tnTSYsljZ25bVpE_GX35xpwZMckq74U8r-I/export?format=csv&gid=0
+      - key: PRODUCTS_CSV_URL
+        value: https://docs.google.com/spreadsheets/d/1emQk0xq3tnTSYsljZ25bVpE_GX35xpwZMckq74U8r-I/export?format=csv&gid=434466654
+      - key: COMPANY_NAME
+        value: ""
