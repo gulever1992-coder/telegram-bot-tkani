@@ -50,6 +50,7 @@ class PaymentData:
     amount: str
     date: str
     bank_details: str
+    direction: str = ""
 
 
 def generate_payment_pdf(data: PaymentData) -> io.BytesIO:
@@ -81,6 +82,8 @@ def generate_payment_pdf(data: PaymentData) -> io.BytesIO:
         y -= line_height
 
     field("Дата", data.date)
+    if data.direction:
+        field("Направление", data.direction)
     field("Дизайнер", data.designer_name)
     field("Заказ / проект", data.order)
 

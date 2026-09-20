@@ -12,6 +12,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import csv
 import io
 
@@ -35,11 +36,14 @@ async def _download_csv(url: str) -> str:
         raise SheetError(
             "Ссылка на таблицу не настроена. Заполните FABRICS_CSV_URL / PRODUCTS_CSV_URL в файле .env."
         )
-    async with aiohttp.ClientSession() as session:
-        async with session.get(url) as resp:
-            if resp.status != 200:
-                raise SheetError(f"Не удалось загрузить таблицу (код {resp.status}).")
-            raw = await resp.read()
+    try:
+        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=20)) as session:
+            async with session.get(url) as resp:
+                if resp.status != 200:
+                    raise SheetError(f"Не удалось загрузить таблицу (код {resp.status}).")
+                raw = await resp.read()
+    except (aiohttp.ClientError, asyncio.TimeoutError, OSError):
+        raise SheetError("Нет связи с Google Таблицей. Попробуйте ещё раз через минуту.") from None
     return raw.decode("utf-8-sig")
 
 
