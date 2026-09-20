@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import datetime as dt
 import hashlib
 import re
@@ -319,65 +320,65 @@ async def pay_date(message: types.Message, state: FSMContext) -> None:
     await _finish(message, state, date)
 
 
-# --- Ткани и продукция (Google Таблица) -------------------------------------
+# --- Поиск ткани: цена и остаток --------------------------------------------
 
 
-async def _show_directions(call: types.CallbackQuery, url: str, title: str, prefix: str) -> None:
-    try:
-        rows = await sheets.fetch_rows(url)
-    except sheets.SheetError as exc:
-        await call.message.edit_text(f"❌ {exc}", reply_markup=kb.back_to_menu())
-        await call.answer()
-        return
-    directions = sheets.unique_directions(rows)
-    await call.message.edit_text(title, reply_markup=kb.directions_keyboard(prefix, directions))
+class SearchForm(StatesGroup):
+    query = State()
+
+
+SEARCH_HINT = (
+    "🔎 <b>Поиск ткани</b>\n"
+    "Введите название ткани (можно часть названия), например: <i>кашемир</i>.\n"
+    "Я скажу цену за погонный метр и остаток у производителя."
+)
+
+
+@router.callback_query(F.data == "menu:search")
+async def cb_search(call: types.CallbackQuery, state: FSMContext) -> None:
+    await state.clear()
+    await state.set_state(SearchForm.query)
+    await call.message.edit_text(SEARCH_HINT, reply_markup=kb.search_keyboard())
     await call.answer()
 
 
-async def _show_direction(call, url: str, formatter, back: str) -> None:
-    idx = int(call.data.split(":")[1])
+@router.message(SearchForm.query, F.text)
+async def search_fabric(message: types.Message, state: FSMContext) -> None:
+    query = message.text.strip()
     try:
-        rows = await sheets.fetch_rows(url)
-        direction = sheets.unique_directions(rows)[idx]
-    except (sheets.SheetError, IndexError):
-        await call.message.edit_text(
-            "❌ Список изменился, откройте раздел заново.", reply_markup=kb.back_to_menu()
+        prices, stocks = await asyncio.gather(
+            sheets.fetch_pairs(config.PRICE_CSV_URL), sheets.fetch_pairs(config.STOCK_CSV_URL)
         )
-        await call.answer()
+    except sheets.SheetError as exc:
+        await message.answer(f"❌ {exc}", reply_markup=kb.search_keyboard())
         return
-    await call.message.edit_text(
-        formatter(rows, direction), reply_markup=kb.result_keyboard(back)
-    )
-    await call.answer()
 
+    names: list[str] = []
+    for name, _ in prices + stocks:
+        if sheets.name_matches(query, name) and name not in names:
+            names.append(name)
 
-@router.callback_query(F.data == "menu:stock")
-async def cb_stock(call: types.CallbackQuery) -> None:
-    await _show_directions(call, config.FABRICS_CSV_URL, "📦 Выберите направление:", "stockdir")
+    if not names:
+        await message.answer(
+            f"Ткань «{query}» не нашёл. Проверьте название или откройте прайс онлайн.\n"
+            "Можно ввести другое название.",
+            reply_markup=kb.search_keyboard(),
+        )
+        return
 
-
-@router.callback_query(F.data.startswith("stockdir:"))
-async def cb_stock_direction(call: types.CallbackQuery) -> None:
-    await _show_direction(call, config.FABRICS_CSV_URL, sheets.format_stock_list, "menu:stock")
-
-
-@router.callback_query(F.data == "menu:price")
-async def cb_price(call: types.CallbackQuery) -> None:
-    await _show_directions(call, config.FABRICS_CSV_URL, "💰 Выберите направление:", "pricedir")
-
-
-@router.callback_query(F.data.startswith("pricedir:"))
-async def cb_price_direction(call: types.CallbackQuery) -> None:
-    await _show_direction(call, config.FABRICS_CSV_URL, sheets.format_price_list, "menu:price")
-
-
-@router.callback_query(F.data == "menu:products")
-async def cb_products(call: types.CallbackQuery) -> None:
-    await _show_directions(call, config.PRODUCTS_CSV_URL, "👗 Выберите направление:", "proddir")
-
-
-@router.callback_query(F.data.startswith("proddir:"))
-async def cb_product_direction(call: types.CallbackQuery) -> None:
-    await _show_direction(
-        call, config.PRODUCTS_CSV_URL, sheets.format_products_list, "menu:products"
-    )
+    price_by = {sheets.normalize(n): v for n, v in prices}
+    stock_by = {sheets.normalize(n): v for n, v in stocks}
+    blocks = []
+    for name in names[:10]:
+        key = sheets.normalize(name)
+        price = price_by.get(key)
+        stock = stock_by.get(key)
+        blocks.append(
+            f"🧵 <b>{name}</b>\n"
+            f"💰 Цена: {price + ' ₽ за погонный метр' if price else 'нет в прайсе'}\n"
+            f"📦 Остаток у производителя: {stock + ' м' if stock else 'нет данных'}"
+        )
+    text = "\n\n".join(blocks)
+    if len(names) > 10:
+        text += f"\n\nНайдено {len(names)}, показаны первые 10. Уточните название."
+    await message.answer(text + "\n\nМожно ввести следующую ткань.", reply_markup=kb.search_keyboard())

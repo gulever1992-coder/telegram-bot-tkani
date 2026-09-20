@@ -133,3 +133,26 @@ def format_products_list(rows: list[dict], direction: str) -> str:
     if len(lines) == 2:
         lines.append("Нет данных по этому направлению.")
     return "\n".join(lines)
+
+
+async def fetch_pairs(url: str) -> list[tuple[str, str]]:
+    """Простая таблица: первая колонка — название, вторая — значение (цена / остаток)."""
+    text = await _download_csv(url)
+    rows = list(csv.reader(io.StringIO(text)))
+    pairs = []
+    for row in rows[1:]:
+        if len(row) < 2:
+            continue
+        name, value = row[0].strip(), row[1].strip()
+        if name:
+            pairs.append((name, value))
+    return pairs
+
+
+def normalize(text: str) -> str:
+    return " ".join(text.lower().replace("ё", "е").split())
+
+
+def name_matches(query: str, name: str) -> bool:
+    n = normalize(name)
+    return all(word in n for word in normalize(query).split())

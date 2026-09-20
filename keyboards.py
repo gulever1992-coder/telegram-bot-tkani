@@ -1,16 +1,21 @@
+import config
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 
 def main_menu() -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
+    builder.row(InlineKeyboardButton(text="🔎 Найти ткань (цена и остаток)", callback_data="menu:search"))
+    builder.row(InlineKeyboardButton(text="📄 Открыть прайс онлайн", url=config.PRICE_ONLINE_URL))
     builder.row(InlineKeyboardButton(text="🎨 Создать картинку", callback_data="menu:image"))
     builder.row(InlineKeyboardButton(text="💵 Выплата дизайнеру", callback_data="menu:payment"))
-    builder.row(
-        InlineKeyboardButton(text="📦 Остатки тканей", callback_data="menu:stock"),
-        InlineKeyboardButton(text="💰 Прайс тканей", callback_data="menu:price"),
-    )
-    builder.row(InlineKeyboardButton(text="👗 Готовая продукция", callback_data="menu:products"))
+    return builder.as_markup()
+
+
+def search_keyboard() -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    builder.row(InlineKeyboardButton(text="📄 Открыть прайс онлайн", url=config.PRICE_ONLINE_URL))
+    builder.row(InlineKeyboardButton(text="🏠 В главное меню", callback_data="menu:home"))
     return builder.as_markup()
 
 
