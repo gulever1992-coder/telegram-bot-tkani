@@ -80,64 +80,24 @@ async def process_image_prompt(message: types.Message) -> None:
         await status.delete()
 
 
-# --- Выплата дизайнеру (диалог: вопрос -> ответ) ----------------------------
+# --- Выплата дизайнеру (вопрос -> ответ, в конце готовый документ) ----------
 
 
 class PaymentForm(StatesGroup):
     designer_name = State()
+    inn = State()
     order = State()
     amount = State()
     date = State()
     bank_details = State()
-    confirm = State()
-
-
-async def _payment_directions() -> list[str]:
-    found: list[str] = []
-    for url in (config.FABRICS_CSV_URL, config.PRODUCTS_CSV_URL):
-        try:
-            for name in sheets.unique_directions(await sheets.fetch_rows(url)):
-                if name not in found:
-                    found.append(name)
-        except sheets.SheetError:
-            continue
-    return found
 
 
 @router.callback_query(F.data == "menu:payment")
 async def cb_payment(call: types.CallbackQuery, state: FSMContext) -> None:
     await state.clear()
-    directions = await _payment_directions()
-    if not directions:
-        await state.update_data(direction="")
-        await state.set_state(PaymentForm.designer_name)
-        await call.message.edit_text(
-            "💵 <b>Выплата дизайнеру</b>\n\nВведите ФИО дизайнера:",
-            reply_markup=kb.cancel_keyboard(),
-        )
-    else:
-        await state.update_data(directions=directions)
-        await call.message.edit_text(
-            "💵 <b>Выплата дизайнеру</b>\n\nВыберите направление:",
-            reply_markup=kb.directions_keyboard("paydir", directions),
-        )
-    await call.answer()
-
-
-@router.callback_query(F.data.startswith("paydir:"))
-async def payment_direction(call: types.CallbackQuery, state: FSMContext) -> None:
-    data = await state.get_data()
-    directions = data.get("directions") or await _payment_directions()
-    try:
-        direction = directions[int(call.data.split(":")[1])]
-    except (IndexError, ValueError):
-        await call.message.edit_text("Список изменился, начните заново.", reply_markup=kb.main_menu())
-        await call.answer()
-        return
-    await state.update_data(direction=direction)
     await state.set_state(PaymentForm.designer_name)
     await call.message.edit_text(
-        f"💵 <b>Выплата дизайнеру</b>\nНаправление: <b>{direction}</b>\n\nВведите ФИО дизайнера:",
+        "💵 <b>Выплата дизайнеру</b>\n\nВведите ФИО дизайнера:",
         reply_markup=kb.cancel_keyboard(),
     )
     await call.answer()
@@ -146,6 +106,13 @@ async def payment_direction(call: types.CallbackQuery, state: FSMContext) -> Non
 @router.message(PaymentForm.designer_name, F.text)
 async def payment_name(message: types.Message, state: FSMContext) -> None:
     await state.update_data(designer_name=message.text.strip())
+    await state.set_state(PaymentForm.inn)
+    await message.answer("ИНН дизайнера:", reply_markup=kb.cancel_keyboard())
+
+
+@router.message(PaymentForm.inn, F.text)
+async def payment_inn(message: types.Message, state: FSMContext) -> None:
+    await state.update_data(inn=message.text.strip())
     await state.set_state(PaymentForm.order)
     await message.answer("Номер или название заказа/проекта:", reply_markup=kb.cancel_keyboard())
 
@@ -191,37 +158,20 @@ async def payment_date_text(message: types.Message, state: FSMContext) -> None:
 async def payment_bank(message: types.Message, state: FSMContext) -> None:
     await state.update_data(bank_details=message.text.strip())
     d = await state.get_data()
-    summary = (
-        "Проверьте данные перед созданием документа:\n\n"
-        + (f"🧭 Направление: {d['direction']}\n" if d.get("direction") else "")
-        + f"👤 Дизайнер: {d['designer_name']}\n"
-        f"📁 Заказ: {d['order']}\n"
-        f"💰 Сумма: {d['amount']} ₽\n"
-        f"📅 Дата: {d['date']}\n"
-        f"🏦 Реквизиты: {d['bank_details']}"
-    )
-    await state.set_state(PaymentForm.confirm)
-    await message.answer(summary, reply_markup=kb.confirm_keyboard())
-
-
-@router.callback_query(F.data == "pay:confirm", PaymentForm.confirm)
-async def payment_confirm(call: types.CallbackQuery, state: FSMContext) -> None:
-    d = await state.get_data()
     payment = PaymentData(
         designer_name=d["designer_name"],
+        inn=d["inn"],
         order=d["order"],
         amount=d["amount"],
         date=d["date"],
         bank_details=d["bank_details"],
-        direction=d.get("direction", ""),
     )
     pdf_buffer = generate_payment_pdf(payment)
     document = BufferedInputFile(pdf_buffer.read(), filename="vyplata_dizayneru.pdf")
-    await call.message.answer_document(
+    await message.answer_document(
         document=document, caption="Документ готов!", reply_markup=kb.main_menu()
     )
     await state.clear()
-    await call.answer()
 
 
 # --- Ткани и продукция (Google Таблица) -------------------------------------

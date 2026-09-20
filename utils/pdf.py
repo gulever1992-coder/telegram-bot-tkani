@@ -46,6 +46,7 @@ def _ensure_font() -> str:
 @dataclass
 class PaymentData:
     designer_name: str
+    inn: str
     order: str
     amount: str
     date: str
@@ -85,6 +86,7 @@ def generate_payment_pdf(data: PaymentData) -> io.BytesIO:
     if data.direction:
         field("Направление", data.direction)
     field("Дизайнер", data.designer_name)
+    field("ИНН", data.inn)
     field("Заказ / проект", data.order)
 
     c.setFont(font, 11)
