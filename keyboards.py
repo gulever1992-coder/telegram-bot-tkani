@@ -53,3 +53,10 @@ def result_keyboard(back_callback: str) -> InlineKeyboardMarkup:
     builder.row(InlineKeyboardButton(text="⬅ Другое направление", callback_data=back_callback))
     builder.row(InlineKeyboardButton(text="🏠 Главное меню", callback_data="menu:home"))
     return builder.as_markup()
+
+
+def choice_keyboard(label: str, callback: str) -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    builder.row(InlineKeyboardButton(text=label, callback_data=callback))
+    builder.row(InlineKeyboardButton(text="✖ Отмена", callback_data="menu:home"))
+    return builder.as_markup()
