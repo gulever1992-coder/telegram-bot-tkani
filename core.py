@@ -1,8 +1,6 @@
-"""Логика бота.
+"""Логика бота: меню, картинки (Nano Banana), поиск ткани, выплата дизайнеру.
 
-Картинка работает через ForceReply (без памяти). Выплата дизайнеру — диалог
-вопрос-ответ на FSM (память в процессе): для облака без постоянного процесса
-(Vercel) нужно внешнее хранилище состояний.
+Диалоги (FSM) хранятся в памяти работающей программы.
 """
 
 from __future__ import annotations
@@ -18,15 +16,15 @@ from aiogram.enums import ParseMode
 from aiogram.filters import CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.types import BufferedInputFile, ForceReply
+from aiogram.types import BufferedInputFile
 
 import config
 import keyboards as kb
-from utils import images, sheets
+from utils import images as legacy_images
+from utils import nano, sheets
 from utils.agency import AgencyData, build_agency_package
 
 WELCOME_TEXT = "👋 Привет! Я рабочий бот-помощник.\n\nВыберите действие в меню ниже:"
-IMAGE_PROMPT = "🎨 Опишите картинку, которую нужно нарисовать (можно по-русски):"
 router = Router()
 dp = Dispatcher()
 dp.include_router(router)
@@ -56,32 +54,241 @@ async def cb_home(call: types.CallbackQuery) -> None:
     await call.answer()
 
 
-# --- Картинка ---------------------------------------------------------------
+# --- Картинки (Nano Banana) -------------------------------------------------
+
+
+class ImageFlow(StatesGroup):
+    up_furniture = State()
+    up_fabric = State()
+    up_note = State()
+    in_furniture = State()
+    in_room = State()
+    in_note = State()
+    text_prompt = State()
+
+
+UPHOLSTERY_PROMPT = (
+    "Edit the FIRST image: change the upholstery of the furniture to the fabric {fabric}. "
+    "Reproduce the fabric's color, pattern, weave and texture accurately, at a realistic scale. "
+    "Keep the furniture's shape, frame, legs, stitching, proportions, camera angle, background, "
+    "lighting and shadows exactly as in the first image. Photorealistic result. {note}"
+)
+INTERIOR_PROMPT = (
+    "Place the furniture from the FIRST image into the interior shown in the SECOND image. "
+    "Match realistic scale, perspective, lighting, reflections and shadows to the room, and place it "
+    "naturally on the floor. Do not change the furniture's design, color or fabric, and keep the room "
+    "unchanged apart from the added furniture. Photorealistic result. {note}"
+)
+
+
+def _photo_ref(message: types.Message) -> tuple[str, str] | None:
+    if message.photo:
+        return message.photo[-1].file_id, "image/jpeg"
+    doc = message.document
+    if doc and (doc.mime_type or "").startswith("image/"):
+        return doc.file_id, doc.mime_type
+    return None
+
+
+async def _download(bot: Bot, ref: tuple[str, str]) -> tuple[bytes, str]:
+    buffer = await bot.download(ref[0])
+    return buffer.read(), ref[1]
 
 
 @router.callback_query(F.data == "menu:image")
-async def cb_image(call: types.CallbackQuery) -> None:
-    await call.message.answer(
-        IMAGE_PROMPT, reply_markup=ForceReply(input_field_placeholder="Опишите картинку")
+async def cb_image(call: types.CallbackQuery, state: FSMContext) -> None:
+    await state.clear()
+    await call.message.edit_text("🎨 <b>Создать картинку</b>\nВыберите, что сделать:", reply_markup=kb.image_menu())
+    await call.answer()
+
+
+@router.callback_query(F.data == "img:upholstery")
+async def cb_upholstery(call: types.CallbackQuery, state: FSMContext) -> None:
+    await state.clear()
+    await state.set_state(ImageFlow.up_furniture)
+    await call.message.edit_text(
+        "🛋 <b>Поменять обивку</b>\n\nШаг 1 из 3. Пришлите <b>фото мебели</b> (диван, кресло, стул...).",
+        reply_markup=kb.cancel_keyboard(),
     )
     await call.answer()
 
 
-@router.message(F.text, F.reply_to_message.text.startswith("🎨 Опишите картинку"))
-async def process_image_prompt(message: types.Message) -> None:
-    status = await message.answer("🎨 Рисую, подождите несколько секунд...")
+@router.callback_query(F.data == "img:interior")
+async def cb_interior(call: types.CallbackQuery, state: FSMContext) -> None:
+    await state.clear()
+    await state.set_state(ImageFlow.in_furniture)
+    await call.message.edit_text(
+        "🏠 <b>Поставить мебель в интерьер</b>\n\nШаг 1 из 3. Пришлите <b>фото мебели</b>.",
+        reply_markup=kb.cancel_keyboard(),
+    )
+    await call.answer()
+
+
+@router.callback_query(F.data == "img:text")
+async def cb_text_image(call: types.CallbackQuery, state: FSMContext) -> None:
+    await state.clear()
+    await state.set_state(ImageFlow.text_prompt)
+    await call.message.edit_text(
+        "✍ <b>Картинка по описанию</b>\n\nОпишите, что нарисовать (можно по-русски):",
+        reply_markup=kb.cancel_keyboard(),
+    )
+    await call.answer()
+
+
+# --- обивка ---
+
+
+@router.message(ImageFlow.up_furniture, F.photo | F.document)
+async def up_furniture(message: types.Message, state: FSMContext) -> None:
+    ref = _photo_ref(message)
+    if not ref:
+        await message.answer("Пришлите именно фото (картинку).", reply_markup=kb.cancel_keyboard())
+        return
+    await state.update_data(furniture=ref)
+    await state.set_state(ImageFlow.up_fabric)
+    await message.answer(
+        "Шаг 2 из 3. Пришлите <b>фото ткани</b> (образец, текстура) — или опишите ткань словами, "
+        "например: «бежевый велюр» или «серая рогожка».",
+        reply_markup=kb.cancel_keyboard(),
+    )
+
+
+@router.message(ImageFlow.up_fabric, F.photo | F.document)
+async def up_fabric_photo(message: types.Message, state: FSMContext) -> None:
+    ref = _photo_ref(message)
+    if not ref:
+        await message.answer("Пришлите фото ткани или опишите её словами.", reply_markup=kb.cancel_keyboard())
+        return
+    await state.update_data(fabric_ref=ref, fabric_text=None)
+    await _ask_note(message, state, ImageFlow.up_note)
+
+
+@router.message(ImageFlow.up_fabric, F.text)
+async def up_fabric_text(message: types.Message, state: FSMContext) -> None:
+    await state.update_data(fabric_ref=None, fabric_text=message.text.strip())
+    await _ask_note(message, state, ImageFlow.up_note)
+
+
+async def _ask_note(message: types.Message, state: FSMContext, new_state) -> None:
+    await state.set_state(new_state)
+    await message.answer(
+        "Шаг 3 из 3. Есть пожелания? Напишите (например: «только сиденье, подушки оставить») "
+        "или нажмите «Пропустить».",
+        reply_markup=kb.choice_keyboard("⏭ Пропустить", "img:skip"),
+    )
+
+
+@router.callback_query(F.data == "img:skip", ImageFlow.up_note)
+async def up_skip(call: types.CallbackQuery, state: FSMContext, bot: Bot) -> None:
+    await call.answer()
+    await _run_upholstery(call.message, state, bot, "")
+
+
+@router.message(ImageFlow.up_note, F.text)
+async def up_note(message: types.Message, state: FSMContext, bot: Bot) -> None:
+    await _run_upholstery(message, state, bot, message.text.strip())
+
+
+async def _run_upholstery(target: types.Message, state: FSMContext, bot: Bot, note: str) -> None:
+    d = await state.get_data()
+    images = [await _download(bot, d["furniture"])]
+    if d.get("fabric_ref"):
+        images.append(await _download(bot, d["fabric_ref"]))
+        fabric = "shown in the SECOND image"
+    else:
+        fabric = f"described as: {d['fabric_text']}"
+    prompt = UPHOLSTERY_PROMPT.format(fabric=fabric, note=f"Additional wishes: {note}" if note else "")
+    await _generate_and_send(target, state, prompt, images)
+
+
+# --- мебель в интерьер ---
+
+
+@router.message(ImageFlow.in_furniture, F.photo | F.document)
+async def in_furniture(message: types.Message, state: FSMContext) -> None:
+    ref = _photo_ref(message)
+    if not ref:
+        await message.answer("Пришлите именно фото (картинку).", reply_markup=kb.cancel_keyboard())
+        return
+    await state.update_data(furniture=ref)
+    await state.set_state(ImageFlow.in_room)
+    await message.answer(
+        "Шаг 2 из 3. Пришлите <b>фото интерьера</b> (комнаты), куда нужно поставить мебель.",
+        reply_markup=kb.cancel_keyboard(),
+    )
+
+
+@router.message(ImageFlow.in_room, F.photo | F.document)
+async def in_room(message: types.Message, state: FSMContext) -> None:
+    ref = _photo_ref(message)
+    if not ref:
+        await message.answer("Пришлите именно фото (картинку).", reply_markup=kb.cancel_keyboard())
+        return
+    await state.update_data(room=ref)
+    await _ask_note(message, state, ImageFlow.in_note)
+
+
+@router.callback_query(F.data == "img:skip", ImageFlow.in_note)
+async def in_skip(call: types.CallbackQuery, state: FSMContext, bot: Bot) -> None:
+    await call.answer()
+    await _run_interior(call.message, state, bot, "")
+
+
+@router.message(ImageFlow.in_note, F.text)
+async def in_note(message: types.Message, state: FSMContext, bot: Bot) -> None:
+    await _run_interior(message, state, bot, message.text.strip())
+
+
+async def _run_interior(target: types.Message, state: FSMContext, bot: Bot, note: str) -> None:
+    d = await state.get_data()
+    images = [await _download(bot, d["furniture"]), await _download(bot, d["room"])]
+    prompt = INTERIOR_PROMPT.format(note=f"Additional wishes: {note}" if note else "")
+    await _generate_and_send(target, state, prompt, images)
+
+
+# --- по описанию ---
+
+
+@router.message(ImageFlow.text_prompt, F.text)
+async def text_image(message: types.Message, state: FSMContext) -> None:
+    await _generate_and_send(message, state, message.text.strip(), [])
+
+
+# --- общее ---
+
+
+@router.message(
+    ImageFlow.up_furniture, ~F.photo & ~F.document
+)
+@router.message(ImageFlow.in_furniture, ~F.photo & ~F.document)
+@router.message(ImageFlow.in_room, ~F.photo & ~F.document)
+async def need_photo(message: types.Message) -> None:
+    await message.answer("Здесь нужно прислать фото (картинку).", reply_markup=kb.cancel_keyboard())
+
+
+async def _generate_and_send(
+    target: types.Message, state: FSMContext, prompt: str, images: list[tuple[bytes, str]]
+) -> None:
+    status = await target.answer("🎨 Создаю картинку, это может занять до минуты...")
     try:
-        image_bytes = await images.generate_image(message.text)
-        photo = BufferedInputFile(image_bytes, filename="image.jpg")
-        await message.answer_photo(
-            photo=photo, caption="Готово!", reply_markup=kb.result_keyboard("menu:image")
+        try:
+            result = await nano.generate(prompt, images)
+        except nano.NanoError:
+            if images or config.GEMINI_API_KEY:
+                raise
+            result = await legacy_images.generate_image(prompt)  # без ключа: простая генерация
+        await target.answer_photo(
+            photo=BufferedInputFile(result, filename="result.png"),
+            caption="Готово!",
+            reply_markup=kb.result_keyboard("menu:image"),
         )
+    except nano.NanoError as exc:
+        await target.answer(f"❌ {exc}", reply_markup=kb.image_menu())
     except Exception as exc:  # noqa: BLE001
-        await message.answer(
-            f"❌ Не получилось создать картинку: {exc}", reply_markup=kb.main_menu()
-        )
+        await target.answer(f"❌ Не получилось создать картинку: {exc}", reply_markup=kb.image_menu())
     finally:
         await status.delete()
+        await state.clear()
 
 
 # --- Выплата дизайнеру: вопрос -> ответ, в конце пакет документов -----------
