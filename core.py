@@ -147,7 +147,7 @@ async def pay_name(message: types.Message, state: FSMContext) -> None:
 async def pay_inn(message: types.Message, state: FSMContext) -> None:
     inn = _digits(message.text)
     if len(inn) not in (10, 12):
-        await message.answer("ИНН — 10 или 12 цифр. Введите ещё раз:", reply_markup=kb.cancel_keyboard())
+        await message.answer("ИНН — только цифры, 10 или 12 штук (например 500100732259). Введите ещё раз или нажмите «Отмена»:", reply_markup=kb.cancel_keyboard())
         return
     await state.update_data(inn=inn)
     await _ask(
@@ -179,7 +179,7 @@ async def pay_address(message: types.Message, state: FSMContext) -> None:
 async def pay_rs(message: types.Message, state: FSMContext) -> None:
     rs = _digits(message.text)
     if len(rs) != 20:
-        await message.answer("Р/с — 20 цифр. Введите ещё раз:", reply_markup=kb.cancel_keyboard())
+        await message.answer("Р/с — только цифры, ровно 20 штук. Введите ещё раз или нажмите «Отмена»:", reply_markup=kb.cancel_keyboard())
         return
     await state.update_data(rs=rs)
     await _ask(message, state, PaymentForm.bank, "6. Название банка (например: Филиал № 7701 Банка ВТБ (ПАО) в г. Москве):")
@@ -195,7 +195,7 @@ async def pay_bank(message: types.Message, state: FSMContext) -> None:
 async def pay_ks(message: types.Message, state: FSMContext) -> None:
     ks = _digits(message.text)
     if len(ks) != 20:
-        await message.answer("К/с — 20 цифр. Введите ещё раз:", reply_markup=kb.cancel_keyboard())
+        await message.answer("К/с — только цифры, ровно 20 штук. Введите ещё раз или нажмите «Отмена»:", reply_markup=kb.cancel_keyboard())
         return
     await state.update_data(ks=ks)
     await _ask(message, state, PaymentForm.bik, "8. БИК банка (9 цифр):")
@@ -205,7 +205,7 @@ async def pay_ks(message: types.Message, state: FSMContext) -> None:
 async def pay_bik(message: types.Message, state: FSMContext) -> None:
     bik = _digits(message.text)
     if len(bik) != 9:
-        await message.answer("БИК — 9 цифр. Введите ещё раз:", reply_markup=kb.cancel_keyboard())
+        await message.answer("БИК — только цифры, ровно 9 штук (например 044525000). Введите ещё раз или нажмите «Отмена»:", reply_markup=kb.cancel_keyboard())
         return
     await state.update_data(bik=bik)
     await _ask(message, state, PaymentForm.phone, "9. Телефон дизайнера:")
