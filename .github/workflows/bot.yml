@@ -1,0 +1,53 @@
+name: Run Telegram bot
+
+on:
+  workflow_dispatch:
+  schedule:
+    # страховка: если бот по какой-то причине не запущен — поднять его
+    - cron: "7 * * * *"
+
+# одновременно работает только один экземпляр бота (иначе Telegram выдаст конфликт)
+concurrency:
+  group: telegram-bot
+  cancel-in-progress: false
+
+permissions:
+  actions: write
+  contents: read
+
+jobs:
+  bot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 355
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Restore private files (company data, stamp, signature)
+        env:
+          PRIVATE_BUNDLE_B64: ${{ secrets.PRIVATE_BUNDLE_B64 }}
+        run: |
+          if [ -n "$PRIVATE_BUNDLE_B64" ]; then
+            echo "$PRIVATE_BUNDLE_B64" | base64 -d > bundle.zip
+            unzip -o bundle.zip
+            rm bundle.zip
+          fi
+
+      - name: Run bot (~5h40m, then hand over to the next run)
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: timeout --signal=SIGINT 20400 python bot.py || true
+
+      - name: Start the next run
+        if: success() || failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run bot.yml --repo "$GITHUB_REPOSITORY" --ref "${{ github.ref_name }}"
