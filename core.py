@@ -20,6 +20,7 @@ from aiogram.types import BufferedInputFile
 
 import config
 import keyboards as kb
+from refund_flow import router as refund_router
 from utils import images as legacy_images
 from utils import nano, sheets
 from utils.agency import AgencyData, build_agency_package
@@ -28,6 +29,7 @@ WELCOME_TEXT = "👋 Привет! Я рабочий бот-помощник.\n\
 router = Router()
 dp = Dispatcher()
 dp.include_router(router)
+dp.include_router(refund_router)
 
 MSK = dt.timezone(dt.timedelta(hours=3))
 
