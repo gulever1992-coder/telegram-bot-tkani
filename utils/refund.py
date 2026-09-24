@@ -9,6 +9,7 @@ from __future__ import annotations
 import datetime as dt
 import io
 import os
+from collections import defaultdict
 
 from num2words import num2words
 from reportlab.lib.pagesizes import A4
@@ -162,6 +163,7 @@ class Page:
 def build_refund_pdf(company: str, kind: str, a: dict) -> io.BytesIO:
     """company: ключ из REFUND_COMPANIES; kind: 'fiz' | 'yur'; a: ответы менеджера."""
     co = REFUND_COMPANIES[company]
+    a = defaultdict(str, {k: ("" if v is None else v) for k, v in a.items()})
     buf = io.BytesIO()
     c = canvas.Canvas(buf, pagesize=A4)
     c.setTitle("Заявление о возврате денежных средств")
@@ -196,14 +198,15 @@ def build_refund_pdf(company: str, kind: str, a: dict) -> io.BytesIO:
         p.line(x, 547, yy + 12)
         pdate = a["passport_date"]
         pdate = f"{pdate:%d.%m.%Y}" if isinstance(pdate, dt.date) else str(pdate)
-        issued = p.wrap(f"{a['passport_issuer']}, {pdate} г.", 175, 11, first_width=160)
+        issued_txt = ", ".join(x for x in (a["passport_issuer"], f"{pdate} г." if pdate else "") if x)
+        issued = p.wrap(issued_txt, 175, 11, first_width=160)
         p.value(x, 547, yy + 12, issued[0] if issued else "", size=11)
         yy = ot + 82.8
         p.line(354.9, 547, yy + 12)
         p.value(354.9, 547, yy + 12, " ".join(issued[1:]), size=11)
         title_y = ot + 112.9
     else:
-        full = f"{a['org']}, в лице {a['director']}"
+        full = ", ".join(x for x in (a["org"], f"в лице {a['director']}" if a["director"] else "") if x)
         for size in (11.5, 10.5, 9.5, 8.5):
             lines = p.wrap(full, 174, size)
             if len(lines) <= 3:
@@ -221,7 +224,7 @@ def build_refund_pdf(company: str, kind: str, a: dict) -> io.BytesIO:
 
     # --- основной текст
     d = a["purchase_date"]
-    date_txt = f'"{d:%d}" {MONTHS[d.month - 1]} {d.year} г.'
+    date_txt = f'"{d:%d}" {MONTHS[d.month - 1]} {d.year} г.' if d else '"____" _____________20___ г.'
     p.text(83.7, T + 24.0, f"{date_txt} я приобрел(а) в вашем магазине товар по Договору / Заказу")
     x = p.text(48.2, T + 44.7, "клиента")
     order = a["order"]
@@ -233,9 +236,9 @@ def build_refund_pdf(company: str, kind: str, a: dict) -> io.BytesIO:
 
     amount = a["amount"]
     p.line(47.5, 544.6, T + 109.3)
-    p.value(48.2, 544.6, T + 109.3, f"{fmt_money(amount)} руб.", center=True)
+    p.value(48.2, 544.6, T + 109.3, f"{fmt_money(amount)} руб." if amount else "", center=True)
     p.ctext(299.0, T + 110.3, "(цифрами)", size=10)
-    words = money_words(amount)
+    words = money_words(amount) if amount else ""
     wl = p.wrap(words, 490, 11.5)
     p.line(48.2, 544.0, T + 144.9)
     p.line(47.5, 544.0, T + 169.2)
@@ -293,10 +296,11 @@ def build_refund_pdf(company: str, kind: str, a: dict) -> io.BytesIO:
     else:
         p.text(48.2, T + 258.7, "Возврат прошу осуществить: ", size=12)
         cash = a["method"] == "cash"
+        card_mode = a["method"] == "card"
         p.checkbox(66.3, T + 284.0, cash)
         x = p.text(84.3, T + 284.2, "Из кассы магазина:", size=11)
         p.line(177.6, 502.1, T + 295.2)
-        p.checkbox(66.3, T + 308.4, not cash)
+        p.checkbox(66.3, T + 308.4, card_mode)
         p.text(84.3, T + 308.6, "На карточный или лицевой счет по реквизитам: ", size=11)
         x = p.text(48.2, T + 332.3, "Получатель (ФИО полностью)", size=11)
         p.line(194.8, 541.2, T + 343.3)
@@ -308,7 +312,7 @@ def build_refund_pdf(company: str, kind: str, a: dict) -> io.BytesIO:
         p.boxes(206.3, T + 405.7, 20, 17.025, 24.6, "")
         for gx in (206.6, 291.5, 376.6, 461.6):
             p.boxes(gx, T + 442.0, 4, 17.1, 24.6, "")
-        if not cash:
+        if card_mode:
             p.value(194.8, 541.2, T + 343.3, a["recipient"])
             p.value(128.9, 300.7, T + 367.0, a["bank"], size=10.5)
             p.value(351.4, 544.1, T + 367.0, a["bik"], size=10.5)
@@ -328,7 +332,8 @@ def build_refund_pdf(company: str, kind: str, a: dict) -> io.BytesIO:
     p.value(210.0, 406.0, sig_y + 11.5, who, size=11, center=True)
     p.text(48.2, cap_y, "               подпись                                                     расшифровка ", size=9)
     x = p.text(48.2, date_y, "Дата: ", size=10)
-    p.text(x, date_y, f"{a['doc_date']:%d.%m.%Y}", size=10)
+    if a["doc_date"]:
+        p.text(x, date_y, f"{a['doc_date']:%d.%m.%Y}", size=10)
     p.text(48.2, date_y + 11.6, "Приложение: Акт на возврат", size=10)
 
     c.showPage()

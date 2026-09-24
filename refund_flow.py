@@ -101,6 +101,7 @@ def _markup(step: Step) -> types.InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     for label, value in step.buttons:
         builder.row(InlineKeyboardButton(text=label, callback_data=f"ref:v:{value}"))
+    builder.row(InlineKeyboardButton(text="⏭ Пропустить", callback_data="ref:skip"))
     builder.row(InlineKeyboardButton(text="✖ Отмена", callback_data="menu:home"))
     return builder.as_markup()
 
@@ -168,7 +169,7 @@ async def _store(target: types.Message, state: FSMContext, step: Step, value) ->
 async def _finish(target: types.Message, state: FSMContext) -> None:
     data = await state.get_data()
     a = dict(data["answers"])
-    if "passport" in a:
+    if a.get("passport"):
         a["passport_series"], a["passport_number"] = a["passport"][:4], a["passport"][4:]
     for key in ("card", "pay_ls"):
         if a.get(key) == "-":
@@ -176,7 +177,8 @@ async def _finish(target: types.Message, state: FSMContext) -> None:
     status = await target.answer("⏳ Готовлю заявление...")
     pdf = build_refund_pdf(data["company"], data["kind"], a)
     who = "fizlico" if data["kind"] == "fiz" else "yurlico"
-    name = f"Zayavlenie_vozvrat_{data['company']}_{who}_{a['doc_date']:%Y%m%d}.pdf"
+    stamp = a.get("doc_date") or dt.datetime.now(MSK).date()
+    name = f"Zayavlenie_vozvrat_{data['company']}_{who}_{stamp:%Y%m%d}.pdf"
     label = REFUND_COMPANIES[data["company"]]["label"]
     kind_ru = "физлицо" if data["kind"] == "fiz" else "юрлицо"
     await target.answer_document(
@@ -261,6 +263,17 @@ async def cb_value(call: types.CallbackQuery, state: FSMContext) -> None:
         value = answers.get("org", "")
     await call.answer()
     await _store(call.message, state, step, value)
+
+
+@router.callback_query(F.data == "ref:skip", RefundForm.ask)
+async def cb_skip(call: types.CallbackQuery, state: FSMContext) -> None:
+    data = await state.get_data()
+    step = _next_step(data["kind"], data["answers"])
+    if step is None:
+        await call.answer()
+        return
+    await call.answer("Пропущено")
+    await _store(call.message, state, step, None)
 
 
 @router.message(RefundForm.ask, F.text)
