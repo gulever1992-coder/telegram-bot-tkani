@@ -8,3 +8,5 @@ __pycache__/
 principal.py
 assets/
 github_secrets/
+
+admin_secrets.json

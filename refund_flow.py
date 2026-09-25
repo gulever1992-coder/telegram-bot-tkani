@@ -13,6 +13,7 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import BufferedInputFile, InlineKeyboardButton
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
+import analytics
 import keyboards as kb
 from utils.ui import show
 from utils.refund import REFUND_COMPANIES, build_refund_pdf
@@ -176,6 +177,7 @@ async def _finish(target: types.Message, state: FSMContext) -> None:
         if a.get(key) == "-":
             a[key] = ""
     status = await target.answer("⏳ Готовлю заявление...")
+    analytics.track(target.chat.id, "refund", f"{data['company']} / {data['kind']}")
     pdf = build_refund_pdf(data["company"], data["kind"], a)
     who = "fizlico" if data["kind"] == "fiz" else "yurlico"
     stamp = a.get("doc_date") or dt.datetime.now(MSK).date()

@@ -12,6 +12,7 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import BufferedInputFile, InlineKeyboardButton
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
+import analytics
 import keyboards as kb
 from utils.ui import show
 from utils import pricelist
@@ -504,6 +505,7 @@ async def cb_make(call: types.CallbackQuery, state: FSMContext) -> None:
     await call.answer("Готовлю файл…")
     tag = _tag(d)
     stem = _file_stem(d)
+    analytics.track(call.message.chat.id, "tag", d["title"], data={"format": fmt})
     after = InlineKeyboardBuilder()
     after.row(InlineKeyboardButton(text="✏ Изменить данные", callback_data="tag:back"))
     after.row(InlineKeyboardButton(text="🏷 Новый ценник", callback_data="menu:tag"))

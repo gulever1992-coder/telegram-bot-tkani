@@ -12,6 +12,7 @@ def main_menu() -> InlineKeyboardMarkup:
     builder.row(InlineKeyboardButton(text="📝 Заявление на возврат", callback_data="menu:refund"))
     builder.row(InlineKeyboardButton(text="🏷 Ценник на мебель", callback_data="menu:tag"))
     builder.row(InlineKeyboardButton(text="📋 Коммерческое предложение", callback_data="menu:kp"))
+    builder.row(InlineKeyboardButton(text="👤 Мой профиль", callback_data="menu:profile"))
     return builder.as_markup()
 
 

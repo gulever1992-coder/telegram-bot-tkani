@@ -18,12 +18,14 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import BufferedInputFile
 
+import analytics
 import config
 from utils.ui import show
 import keyboards as kb
 from refund_flow import router as refund_router
 from tag_flow import router as tag_router
 from kp_flow import router as kp_router
+from onboarding import ProfileGate, router as onb_router
 from utils import images as legacy_images
 from utils import nano, sheets
 from utils.agency import AgencyData, build_agency_package
@@ -31,6 +33,9 @@ from utils.agency import AgencyData, build_agency_package
 WELCOME_TEXT = "👋 Привет! Я рабочий бот-помощник.\n\nВыберите действие в меню ниже:"
 router = Router()
 dp = Dispatcher()
+dp.message.outer_middleware(ProfileGate())
+dp.callback_query.outer_middleware(ProfileGate())
+dp.include_router(onb_router)
 dp.include_router(router)
 dp.include_router(refund_router)
 dp.include_router(tag_router)
@@ -51,12 +56,14 @@ def secret_token() -> str:
 
 
 @router.message(CommandStart())
-async def cmd_start(message: types.Message) -> None:
+async def cmd_start(message: types.Message, state: FSMContext) -> None:
+    await state.clear()
     await message.answer(WELCOME_TEXT, reply_markup=kb.main_menu())
 
 
 @router.callback_query(F.data == "menu:home")
-async def cb_home(call: types.CallbackQuery) -> None:
+async def cb_home(call: types.CallbackQuery, state: FSMContext) -> None:
+    await state.clear()
     await show(call.message, WELCOME_TEXT, reply_markup=kb.main_menu())
     await call.answer()
 
@@ -289,6 +296,7 @@ async def _generate_and_send(
             caption="Готово!",
             reply_markup=kb.result_keyboard("menu:image"),
         )
+        analytics.track(target.chat.id, "image", prompt[:40])
     except nano.NanoError as exc:
         await target.answer(f"❌ {exc}", reply_markup=kb.image_menu())
     except Exception as exc:  # noqa: BLE001
@@ -507,6 +515,7 @@ async def _finish(target: types.Message, state: FSMContext, date: dt.date) -> No
         tax=d["tax"], date=date,
     )
     status = await target.answer("⏳ Готовлю документы...")
+    analytics.track(target.chat.id, "payout", data.agent_name)
     pdf = build_agency_package(data)
     document = BufferedInputFile(pdf.read(), filename=f"Agency_Package_{data.inn}.pdf")
     await target.answer_document(
@@ -559,6 +568,7 @@ async def cb_search(call: types.CallbackQuery, state: FSMContext) -> None:
 @router.message(SearchForm.query, F.text)
 async def search_fabric(message: types.Message, state: FSMContext) -> None:
     query = message.text.strip()
+    analytics.track(message.chat.id, "search", query[:40])
     try:
         prices, stocks = await asyncio.gather(
             sheets.fetch_pairs(config.PRICE_CSV_URL), sheets.fetch_pairs(config.STOCK_CSV_URL)

@@ -13,7 +13,9 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import BufferedInputFile, InlineKeyboardButton
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
+import analytics
 import keyboards as kb
+import profiles
 from utils import pricelist
 from utils.kp import KP, KPItem, PAYMENTS, build_kp_pdf, build_kp_preview, date_ru, prep_photo, rub
 from utils.ui import show
@@ -27,7 +29,7 @@ class KPForm(StatesGroup):
     run = State()
 
 
-HEAD = ["kind", "customer", "manager", "phone"]
+HEAD = ["kind", "customer"]  # менеджер, телефон, Telegram и шоу-рум берутся из профиля
 ITEM_STD = ["query", "qty", "size", "material", "link", "price", "discount", "photo"]
 ITEM_VIS = ["title", "qty", "size", "material", "price", "discount", "photo",
             "alt_query", "alt_size", "alt_material", "alt_link", "alt_price", "alt_photo"]
@@ -37,9 +39,11 @@ TERMS = ["production", "services", "valid", "payments"]
 # --- данные -----------------------------------------------------------------------
 
 
-def _kp_new() -> dict:
+def _kp_new(profile: dict | None = None) -> dict:
+    p = profile or {}
     return {
-        "kind": "", "customer": "", "manager": "", "phone": "", "items": [],
+        "kind": "", "customer": "", "manager": p.get("name", ""), "phone": p.get("phone", ""),
+        "telegram": p.get("telegram", ""), "showroom": p.get("showroom", ""), "items": [],
         "production": "55 рабочих дней", "services": "По согласованию",
         "valid_days": 7, "payments": [True] * len(PAYMENTS),
     }
@@ -64,6 +68,7 @@ def _build(k: dict) -> KP:
         ))
     return KP(
         kind={"vis": "visual"}.get(k["kind"], "standard"), customer=k["customer"], manager=k["manager"], phone=k["phone"],
+        telegram=k.get("telegram", ""), showroom=k.get("showroom", ""),
         date=now.date(), valid_days=k["valid_days"], number=f"{now:%d%m}-{now:%H%M}", items=items,
         production=k["production"], services=k["services"],
         payments=[p for p, on in zip(PAYMENTS, k["payments"]) if on],
@@ -306,9 +311,6 @@ async def _answer(target: types.Message, state: FSMContext, uid: int, value: str
         text, buttons, skip = _prompt(data["queue"][0], data["kp"], data.get("cur") or {})
         await target.answer(error, reply_markup=_markup(data["queue"][0], buttons, skip))
         return
-    data = await state.get_data()
-    if data["mode"] == "head" and not data["queue"]:
-        LAST_MANAGER[uid] = (data["kp"]["manager"], data["kp"]["phone"])
     await _next(target, state, uid)
 
 
@@ -319,7 +321,7 @@ async def _answer(target: types.Message, state: FSMContext, uid: int, value: str
 async def cb_kp(call: types.CallbackQuery, state: FSMContext) -> None:
     await state.clear()
     await state.set_state(KPForm.run)
-    await state.update_data(kp=_kp_new(), queue=list(HEAD), mode="head", cur=None, terms_done=False)
+    await state.update_data(kp=_kp_new(profiles.get(call.from_user.id)), queue=list(HEAD), mode="head", cur=None, terms_done=False)
     await show(
         call.message,
         "📋 <b>Коммерческое предложение</b>\n"
@@ -659,12 +661,27 @@ async def cb_make(call: types.CallbackQuery, state: FSMContext) -> None:
     await call.answer("Готовлю PDF…")
     kp = _build(k)
     pdf = build_kp_pdf(kp)
+    filename = f"KP_Creatica_{kp.number}.pdf"
+    contacts = " · ".join(x for x in (kp.phone, kp.telegram) if x)
+    analytics.track(
+        call.message.chat.id, "kp", kp.customer,
+        data={"sum": kp.total(), "items": len(kp.items), "number": kp.number, "customer": kp.customer,
+              "kind": kp.kind},
+        document=(pdf, filename),
+        caption=(
+            f"📋 КП №{kp.number}\n"
+            f"👤 Менеджер: {kp.manager or '—'}" + (f" · {contacts}" if contacts else "") + "\n"
+            f"🏬 Шоу-рум: {kp.showroom or '—'}\n"
+            f"Заказчик: {kp.customer or '—'}\n"
+            f"Позиций: {len(kp.items)} · Итого: {rub(kp.total())}"
+        ),
+    )
     b = InlineKeyboardBuilder()
     b.row(InlineKeyboardButton(text="✏ Изменить", callback_data="kp:back"))
     b.row(InlineKeyboardButton(text="🆕 Новое КП", callback_data="menu:kp"))
     b.row(InlineKeyboardButton(text="🏠 В главное меню", callback_data="menu:home"))
     await call.message.answer_document(
-        BufferedInputFile(pdf, filename=f"KP_Creatica_{kp.number}.pdf"),
+        BufferedInputFile(pdf, filename=filename),
         caption=f"📋 КП для: {kp.customer or 'заказчика'} — итого {rub(kp.total())}",
         reply_markup=b.as_markup(),
     )

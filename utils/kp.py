@@ -75,6 +75,8 @@ class KP:
     customer: str = ""
     manager: str = ""
     phone: str = ""
+    telegram: str = ""
+    showroom: str = ""
     date: dt.date = field(default_factory=dt.date.today)
     valid_days: int = 7
     number: str = ""
@@ -222,7 +224,7 @@ class _Renderer:
         self.text(MR, 45, SITE, size=8.5, color=GREY, align="r")
         # подвал
         self.hair(PH - 38)
-        self.text(ML, PH - 26, SHOWROOM, size=7, color=GREY)
+        self.text(ML, PH - 26, self.kp.showroom or SHOWROOM, size=7, color=GREY)
         self.text(MR, PH - 26, f"{self.page} / {self.total}", size=7, color=GREY, align="r")
         self.y = 78.0
 
@@ -409,8 +411,9 @@ class _Renderer:
         self.need(70)
         self.label(ML, self.y, "Ответственный менеджер")
         self.text(ML, self.y + 18, kp.manager or "—", size=13)
-        if kp.phone:
-            self.text(ML, self.y + 34, kp.phone, size=10, color=GREY)
+        contacts = "  ·  ".join(x for x in (kp.phone, kp.telegram) if x)
+        if contacts:
+            self.text(ML, self.y + 34, contacts, size=10, color=GREY)
         self.text(MR, self.y + 18, "С уважением,", size=10, color=GREY, align="r")
         self.text(MR, self.y + 34, "команда Creatica", size=10, align="r")
         self.y += 62
