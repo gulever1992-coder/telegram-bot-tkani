@@ -19,8 +19,10 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import BufferedInputFile
 
 import config
+from utils.ui import show
 import keyboards as kb
 from refund_flow import router as refund_router
+from tag_flow import router as tag_router
 from utils import images as legacy_images
 from utils import nano, sheets
 from utils.agency import AgencyData, build_agency_package
@@ -30,6 +32,7 @@ router = Router()
 dp = Dispatcher()
 dp.include_router(router)
 dp.include_router(refund_router)
+dp.include_router(tag_router)
 
 MSK = dt.timezone(dt.timedelta(hours=3))
 
@@ -52,7 +55,7 @@ async def cmd_start(message: types.Message) -> None:
 
 @router.callback_query(F.data == "menu:home")
 async def cb_home(call: types.CallbackQuery) -> None:
-    await call.message.edit_text(WELCOME_TEXT, reply_markup=kb.main_menu())
+    await show(call.message, WELCOME_TEXT, reply_markup=kb.main_menu())
     await call.answer()
 
 
@@ -100,7 +103,7 @@ async def _download(bot: Bot, ref: tuple[str, str]) -> tuple[bytes, str]:
 @router.callback_query(F.data == "menu:image")
 async def cb_image(call: types.CallbackQuery, state: FSMContext) -> None:
     await state.clear()
-    await call.message.edit_text("🎨 <b>Создать картинку</b>\nВыберите, что сделать:", reply_markup=kb.image_menu())
+    await show(call.message, "🎨 <b>Создать картинку</b>\nВыберите, что сделать:", reply_markup=kb.image_menu())
     await call.answer()
 
 
@@ -108,7 +111,7 @@ async def cb_image(call: types.CallbackQuery, state: FSMContext) -> None:
 async def cb_upholstery(call: types.CallbackQuery, state: FSMContext) -> None:
     await state.clear()
     await state.set_state(ImageFlow.up_furniture)
-    await call.message.edit_text(
+    await show(call.message, 
         "🛋 <b>Поменять обивку</b>\n\nШаг 1 из 3. Пришлите <b>фото мебели</b> (диван, кресло, стул...).",
         reply_markup=kb.cancel_keyboard(),
     )
@@ -119,7 +122,7 @@ async def cb_upholstery(call: types.CallbackQuery, state: FSMContext) -> None:
 async def cb_interior(call: types.CallbackQuery, state: FSMContext) -> None:
     await state.clear()
     await state.set_state(ImageFlow.in_furniture)
-    await call.message.edit_text(
+    await show(call.message, 
         "🏠 <b>Поставить мебель в интерьер</b>\n\nШаг 1 из 3. Пришлите <b>фото мебели</b>.",
         reply_markup=kb.cancel_keyboard(),
     )
@@ -130,7 +133,7 @@ async def cb_interior(call: types.CallbackQuery, state: FSMContext) -> None:
 async def cb_text_image(call: types.CallbackQuery, state: FSMContext) -> None:
     await state.clear()
     await state.set_state(ImageFlow.text_prompt)
-    await call.message.edit_text(
+    await show(call.message, 
         "✍ <b>Картинка по описанию</b>\n\nОпишите, что нарисовать (можно по-русски):",
         reply_markup=kb.cancel_keyboard(),
     )
@@ -337,7 +340,7 @@ async def _ask(target: types.Message, state: FSMContext, new_state, question: st
 async def cb_payment(call: types.CallbackQuery, state: FSMContext) -> None:
     await state.clear()
     await state.set_state(PaymentForm.agent_name)
-    await call.message.edit_text(
+    await show(call.message, 
         "💵 <b>Выплата дизайнеру</b>\n"
         "Отвечайте на вопросы по очереди, в конце пришлю готовый пакет документов "
         "(договор, отчёт, счёт, акт).\n\n"
@@ -547,7 +550,7 @@ SEARCH_HINT = (
 async def cb_search(call: types.CallbackQuery, state: FSMContext) -> None:
     await state.clear()
     await state.set_state(SearchForm.query)
-    await call.message.edit_text(SEARCH_HINT, reply_markup=kb.search_keyboard())
+    await show(call.message, SEARCH_HINT, reply_markup=kb.search_keyboard())
     await call.answer()
 
 

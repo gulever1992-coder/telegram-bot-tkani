@@ -15,6 +15,8 @@ PRICE_ONLINE_URL = os.getenv("PRICE_ONLINE_URL") or (
     f"https://docs.google.com/spreadsheets/d/{_SHEET_ID}/edit?gid=0#gid=0"
 )
 
+PRICELIST_SHEET_ID = os.getenv("PRICELIST_SHEET_ID") or "1d3UN8U5H-SEFK_xApNV34b5PWk4G8ah3-NUuYz_3cxQ"
+
 COMPANY_NAME = os.getenv("COMPANY_NAME", "")
 
 if not TELEGRAM_BOT_TOKEN:

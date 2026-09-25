@@ -14,6 +14,7 @@ from aiogram.types import BufferedInputFile, InlineKeyboardButton
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 import keyboards as kb
+from utils.ui import show
 from utils.refund import REFUND_COMPANIES, build_refund_pdf
 
 router = Router()
@@ -200,7 +201,7 @@ async def cb_refund(call: types.CallbackQuery, state: FSMContext) -> None:
     for key, co in REFUND_COMPANIES.items():
         builder.row(InlineKeyboardButton(text=co["label"], callback_data=f"ref:co:{key}"))
     builder.row(InlineKeyboardButton(text="🏠 В главное меню", callback_data="menu:home"))
-    await call.message.edit_text(
+    await show(call.message, 
         "📝 <b>Заявление на возврат денежных средств</b>\nНа какую организацию оформляем?",
         reply_markup=builder.as_markup(),
     )
@@ -218,7 +219,7 @@ async def cb_company(call: types.CallbackQuery, state: FSMContext) -> None:
     builder.row(InlineKeyboardButton(text="👤 Физическое лицо", callback_data="ref:kind:fiz"))
     builder.row(InlineKeyboardButton(text="🏢 Юридическое лицо", callback_data="ref:kind:yur"))
     builder.row(InlineKeyboardButton(text="⬅ Назад", callback_data="menu:refund"))
-    await call.message.edit_text(
+    await show(call.message, 
         f"📝 Заявление на возврат — <b>{REFUND_COMPANIES[company]['label']}</b>\nКто покупатель?",
         reply_markup=builder.as_markup(),
     )
@@ -235,7 +236,7 @@ async def cb_kind(call: types.CallbackQuery, state: FSMContext) -> None:
     await state.update_data(kind=kind, answers={})
     await state.set_state(RefundForm.ask)
     who = "физического лица" if kind == "fiz" else "юридического лица"
-    await call.message.edit_text(
+    await show(call.message, 
         f"📝 Заявление на возврат — {REFUND_COMPANIES[data['company']]['label']}, покупатель — {who}.\n"
         "Отвечайте на вопросы по очереди, в конце пришлю готовый PDF."
     )
