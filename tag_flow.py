@@ -15,7 +15,7 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 import keyboards as kb
 from utils.ui import show
 from utils import pricelist
-from utils.tag import Tag, build_tag_docx, build_tag_pdf, money
+from utils.tag import Tag, build_tag_docx, build_tag_pdf, build_tag_preview, money
 
 router = Router()
 
@@ -89,6 +89,8 @@ def _next_field(d: dict) -> str | None:
     asked = d["asked"]
     if "price" not in asked:
         return "price"
+    if "old_price" not in asked:
+        return "old_price"
     if _dims_missing(d) and "dims" not in asked:
         return "dims"
     if not d["article"] and "article" not in asked:
@@ -103,7 +105,25 @@ def _next_field(d: dict) -> str | None:
 def _prompt(d: dict, field: str) -> tuple[str, list[tuple[str, str]]]:
     if field == "price":
         hint = f"\nПо прайсу цена «от»: <b>{money(d['price_from'])} ₽</b> (минимальная)." if d["price_from"] else ""
-        return f"💰 Цена образца, руб. (например 39800):{hint}", []
+        return (
+            "💰 <b>Цена образца</b> — по какой цене продаётся выставленный образец, руб. (например 39800)."
+            "\nОна будет напечатана <b>крупно</b> внизу справа на ценнике." + hint,
+            [],
+        )
+    if field == "old_price":
+        buttons = []
+        note = ""
+        if d["price_from"] and d["price"] and d["price_from"] > d["price"]:
+            buttons.append((f"✅ Зачеркнуть цену «от»: {money(d['price_from'])} ₽", "tag:old:from"))
+            note = f"\nЦена «от» по прайсу (минимальная): <b>{money(d['price_from'])} ₽</b>."
+        elif d["price_from"]:
+            note = f"\nЦена «от» по прайсу: {money(d['price_from'])} ₽ (она не выше цены образца)."
+        buttons.append(("🚫 Без зачёркнутой цены", "tag:old:none"))
+        return (
+            "🏷 <b>Зачёркнутая цена</b> — «старая» цена, она печатается мелко над ценой образца и перечёркивается."
+            + note + "\nНажмите кнопку или введите старую цену числом.",
+            buttons,
+        )
     if field == "dims":
         have = [d["length"], d["depth"], d["height"]]
         known = " / ".join(x or "—" for x in have)
@@ -189,7 +209,18 @@ async def _preview(target: types.Message, state: FSMContext) -> None:
     data = await state.get_data()
     await state.set_state(TagForm.edit)
     await state.update_data(field=None)
-    await target.answer(_summary(data["tag"]), reply_markup=_preview_markup())
+    d = data["tag"]
+    png = None
+    try:
+        png = build_tag_preview(_tag(d))
+    except Exception:  # превью необязательно — без него бот работает
+        png = None
+    if png:
+        await target.answer_photo(
+            BufferedInputFile(png, filename="preview.png"), caption=_summary(d), reply_markup=_preview_markup()
+        )
+    else:
+        await target.answer(_summary(d), reply_markup=_preview_markup())
 
 
 def _apply(d: dict, field: str, value) -> None:
@@ -202,13 +233,10 @@ def _apply(d: dict, field: str, value) -> None:
             d[field] = value
     elif field == "price":
         d["price"] = value
-        # зачёркиваем цену «от» из прайса, если она выше цены образца
-        if value and d["price_from"] and d["price_from"] > value:
-            d["old_price"] = d["price_from"]
-        elif not value or (d["old_price"] and d["old_price"] <= value):
+        if not value or (d["old_price"] and d["old_price"] <= value):
             d["old_price"] = None
     elif field == "old_price":
-        d["old_price"] = value
+        d["old_price"] = value or None
     if field not in d["asked"]:
         d["asked"].append(field)
 
@@ -326,6 +354,19 @@ async def cb_option(call: types.CallbackQuery, state: FSMContext) -> None:
         return
     d = data["tag"]
     _apply(d, field, options[int(idx)])
+    await state.update_data(tag=d)
+    await call.answer()
+    await _ask(call.message, state)
+
+
+@router.callback_query(F.data.startswith("tag:old:"), TagForm.ask)
+async def cb_old(call: types.CallbackQuery, state: FSMContext) -> None:
+    data = await state.get_data()
+    d = data["tag"]
+    if data.get("field") != "old_price":
+        await call.answer("Этот вопрос уже пройден")
+        return
+    _apply(d, "old_price", d["price_from"] if call.data.endswith("from") else None)
     await state.update_data(tag=d)
     await call.answer()
     await _ask(call.message, state)

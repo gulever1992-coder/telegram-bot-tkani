@@ -167,6 +167,14 @@ def build_tag_pdf(tag: Tag) -> bytes:
     return buf.getvalue()
 
 
+def build_tag_preview(tag: Tag, dpi: int = 75) -> bytes:
+    """Картинка (PNG) ценника — чтобы менеджер видел, как всё расположено."""
+    import pymupdf
+
+    doc = pymupdf.open(stream=build_tag_pdf(tag), filetype="pdf")
+    return doc[0].get_pixmap(dpi=dpi).tobytes("png")
+
+
 # ---------------------------------------------------------------- Word
 
 
