@@ -23,6 +23,7 @@ from utils.ui import show
 import keyboards as kb
 from refund_flow import router as refund_router
 from tag_flow import router as tag_router
+from kp_flow import router as kp_router
 from utils import images as legacy_images
 from utils import nano, sheets
 from utils.agency import AgencyData, build_agency_package
@@ -33,6 +34,7 @@ dp = Dispatcher()
 dp.include_router(router)
 dp.include_router(refund_router)
 dp.include_router(tag_router)
+dp.include_router(kp_router)
 
 MSK = dt.timezone(dt.timedelta(hours=3))
 
