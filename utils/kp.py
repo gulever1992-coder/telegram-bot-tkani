@@ -236,17 +236,11 @@ class _Renderer:
 
     def cover(self):
         kp = self.kp
-        y = self.y + 22
+        y = self.y + 14
         self.label(ML, y, "Коммерческое предложение" + (f" № {kp.number}" if kp.number else ""))
-        y += 44
-        self.text(ML, y, "Специальное", size=42)
-        y += 46
-        self.text(ML, y, "предложение", size=42)
-        y += 22
-        self.text(ML, y, "на оформление заказа", size=11, color=GREY)
-        y += 34
+        y += 14
         self.hair(y, color=INK, width=0.8)
-        y += 16
+        y += 18
         cols = [(ML, "Заказчик", kp.customer or "—", 205), (260, "Дата", date_ru(kp.date), 90),
                 (365, "Действует до", date_ru(kp.valid_until), 90), (470, "Менеджер", kp.manager or "—", 85)]
         tallest = 0
