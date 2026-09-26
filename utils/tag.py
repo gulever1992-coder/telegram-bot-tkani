@@ -1,4 +1,4 @@
-"""Ценник на мебель, А4: PDF (ReportLab, координаты снятые с шаблона) и Word (python-docx)."""
+﻿"""Ценник на мебель, А4: PDF (ReportLab, координаты снятые с шаблона) и Word (python-docx)."""
 
 from __future__ import annotations
 
@@ -53,8 +53,8 @@ class Tag:
     frame: str = ""
     filler: str = ""
     article: str = ""
-    price: int | None = None
-    old_price: int | None = None
+    price: int | None = None  # крупная цена «от» (минимальная по прайсу)
+    sample_price: int | None = None  # цена образца — мелко сверху, с подписью, никогда не зачёркивается
 
     @property
     def installment(self) -> int | None:
@@ -151,16 +151,17 @@ def build_tag_pdf(tag: Tag) -> bytes:
         c.setFont(REG, 13.3)
         c.drawString(X_VALUE, _y(1535), "В рассрочку")
         c.drawString(X_VALUE, _y(1574), f"от {tag.installment} руб./месяц")
-    if tag.old_price:
+    if tag.sample_price:
+        c.setFont(REG, 11.5)
+        c.drawString(X_VALUE, _y(1722), "Цена образца")
         c.setFont(REG, 18.2)
-        text = money(tag.old_price)
-        c.drawString(X_VALUE, _y(1765), text)
-        tw = pdfmetrics.stringWidth(text, REG, 18.2)
-        c.setLineWidth(0.9)
-        c.line(X_VALUE - 6, _y(1747), X_VALUE + tw + 6, _y(1747))
+        c.drawString(X_VALUE, _y(1765), money(tag.sample_price))
     if tag.price:
+        c.setFont(REG, 18.2)
+        c.drawString(X_VALUE, _y(1905), "от")
+        off = pdfmetrics.stringWidth("от ", REG, 18.2)
         c.setFont(REG, 46.5)
-        c.drawString(X_VALUE, _y(1905), money(tag.price))
+        c.drawString(X_VALUE + off, _y(1905), money(tag.price))
 
     c.showPage()
     c.save()
@@ -341,13 +342,16 @@ def build_tag_docx(tag: Tag) -> bytes:
         borders(tcPr, top=True, right=right)
         cell_margins(tcPr, lm)
 
-    def cell_line(cell, first, text, baseline_px, size, cur, strike=False):
+    def cell_line(cell, first, text, baseline_px, size, cur, strike=False, prefix="", prefix_size=0, big=""):
         """абзац в ячейке: базовая линия на baseline_px, cur — текущая ордината (pt от верха линии)"""
         line = size * 1.3
         p = cell.paragraphs[0] if first else cell.add_paragraph()
         before = (baseline_px - Y_HLINE) * K - BASE * line - cur
         fmt(p, before, line)
-        if text:
+        if prefix:
+            run(p, prefix, prefix_size)
+            run(p, big, size)
+        elif text:
             run(p, text, size, strike=strike)
         return p, max(cur + max(before, 0), 0) + line
 
@@ -365,10 +369,11 @@ def build_tag_docx(tag: Tag) -> bytes:
     if tag.installment:
         p, cur = cell_line(c2, first, "В рассрочку", 1535, 13, cur); first = False
         p, cur = cell_line(c2, first, f"от {tag.installment} руб./месяц", 1574, 13, cur)
-    if tag.old_price:
-        p, cur = cell_line(c2, first, money(tag.old_price), 1765, 18, cur, strike=True); first = False
+    if tag.sample_price:
+        p, cur = cell_line(c2, first, "Цена образца", 1722, 11, cur); first = False
+        p, cur = cell_line(c2, first, money(tag.sample_price), 1765, 18, cur)
     if tag.price:
-        p, cur = cell_line(c2, first, money(tag.price), 1905, 46, cur); first = False
+        p, cur = cell_line(c2, first, "", 1905, 46, cur, prefix="от ", prefix_size=18, big=money(tag.price)); first = False
 
     # Word требует абзац после таблицы — делаем его крошечным
     tail = doc.add_paragraph()

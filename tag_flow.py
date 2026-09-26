@@ -30,7 +30,7 @@ FIELD_TITLES = {
     "frame": "Каркас",
     "filler": "Наполнитель",
     "price": "Цена образца",
-    "old_price": "Зачёркнутая цена",
+    "price_from": "Цена «от»",
 }
 
 
@@ -68,8 +68,8 @@ def _new_tag(item: pricelist.Item) -> dict:
         "filler": "",
         "article": item.article or "",
         "price": None,
-        "old_price": None,
         "price_from": price_from,
+        "list_price": price_from,
         "asked": [],
     }
 
@@ -78,7 +78,7 @@ def _tag(d: dict) -> Tag:
     return Tag(
         title=d["title"], length=d["length"], depth=d["depth"], height=d["height"],
         frame=d["frame"], filler=d["filler"], article=d["article"],
-        price=d["price"], old_price=d["old_price"],
+        price=d["price_from"], sample_price=d["price"],
     )
 
 
@@ -90,8 +90,8 @@ def _next_field(d: dict) -> str | None:
     asked = d["asked"]
     if "price" not in asked:
         return "price"
-    if "old_price" not in asked:
-        return "old_price"
+    if not d["price_from"] and "price_from" not in asked:
+        return "price_from"
     if _dims_missing(d) and "dims" not in asked:
         return "dims"
     if not d["article"] and "article" not in asked:
@@ -105,25 +105,17 @@ def _next_field(d: dict) -> str | None:
 
 def _prompt(d: dict, field: str) -> tuple[str, list[tuple[str, str]]]:
     if field == "price":
-        hint = f"\nПо прайсу цена «от»: <b>{money(d['price_from'])} ₽</b> (минимальная)." if d["price_from"] else ""
+        hint = f"\nПо прайсу цена «от»: <b>{money(d['list_price'])} ₽</b> — она печатается крупно." if d["list_price"] else ""
         return (
-            "💰 <b>Цена образца</b> — по какой цене продаётся выставленный образец, руб. (например 39800)."
-            "\nОна будет напечатана <b>крупно</b> внизу справа на ценнике." + hint,
+            "💰 <b>Цена образца</b> — по какой цене продаётся выставленный образец, руб. (например 190000)."
+            "\nОна печатается мелко над крупной ценой с подписью «Цена образца»." + hint,
             [],
         )
-    if field == "old_price":
-        buttons = []
-        note = ""
-        if d["price_from"] and d["price"] and d["price_from"] > d["price"]:
-            buttons.append((f"✅ Зачеркнуть цену «от»: {money(d['price_from'])} ₽", "tag:old:from"))
-            note = f"\nЦена «от» по прайсу (минимальная): <b>{money(d['price_from'])} ₽</b>."
-        elif d["price_from"]:
-            note = f"\nЦена «от» по прайсу: {money(d['price_from'])} ₽ (она не выше цены образца)."
-        buttons.append(("🚫 Без зачёркнутой цены", "tag:old:none"))
+    if field == "price_from":
         return (
-            "🏷 <b>Зачёркнутая цена</b> — «старая» цена, она печатается мелко над ценой образца и перечёркивается."
-            + note + "\nНажмите кнопку или введите старую цену числом.",
-            buttons,
+            "🏷 <b>Цена «от»</b> — минимальная цена позиции по прайсу, руб. Она печатается крупно внизу. "
+            "В прайсе её не нашёл — введите числом:",
+            [],
         )
     if field == "dims":
         have = [d["length"], d["depth"], d["height"]]
@@ -168,9 +160,9 @@ def _summary(d: dict) -> str:
     def v(x):
         return x if x else "—"
 
-    old = f"{money(d['old_price'])} ₽" if d["old_price"] else "нет"
-    price = f"{money(d['price'])} ₽" if d["price"] else "—"
-    inst = f"\nВ рассрочку: от {_tag(d).installment} руб./месяц" if d["price"] else ""
+    sample = f"{money(d['price'])} ₽" if d["price"] else "—"
+    big = f"от {money(d['price_from'])} ₽" if d["price_from"] else "—"
+    inst = f"\nВ рассрочку: от {_tag(d).installment} руб./месяц" if d["price_from"] else ""
     lines = [
         "🏷 <b>Ценник — проверьте данные</b>",
         f"<b>{d['title']}</b>",
@@ -178,11 +170,9 @@ def _summary(d: dict) -> str:
         f"Каркас: {v(d['frame'])}",
         f"Наполнитель: {v(d['filler'])}",
         f"Артикул: {v(d['article'])}",
-        f"Цена образца: <b>{price}</b>{inst}",
-        f"Зачёркнутая цена: {old}",
+        f"Цена образца (мелко сверху): <b>{sample}</b>",
+        f"Цена «от» (крупно): <b>{big}</b>{inst}",
     ]
-    if d["price_from"]:
-        lines.append(f"<i>Цена «от» по прайсу: {money(d['price_from'])} ₽</i>")
     return "\n".join(lines)
 
 
@@ -193,7 +183,7 @@ def _preview_markup() -> types.InlineKeyboardMarkup:
         InlineKeyboardButton(text="📝 Word", callback_data="tag:make:docx"),
         InlineKeyboardButton(text="📦 Оба", callback_data="tag:make:both"),
     )
-    edits = ["title", "dims", "article", "frame", "filler", "price", "old_price"]
+    edits = ["title", "dims", "article", "frame", "filler", "price", "price_from"]
     for i in range(0, len(edits), 2):
         builder.row(
             *[
@@ -232,12 +222,8 @@ def _apply(d: dict, field: str, value) -> None:
     elif field in ("title", "article", "frame", "filler"):
         if value is not None:
             d[field] = value
-    elif field == "price":
-        d["price"] = value
-        if not value or (d["old_price"] and d["old_price"] <= value):
-            d["old_price"] = None
-    elif field == "old_price":
-        d["old_price"] = value or None
+    elif field in ("price", "price_from"):
+        d[field] = value or None
     if field not in d["asked"]:
         d["asked"].append(field)
 
@@ -250,9 +236,7 @@ def _parse(field: str, text: str):
         if len(nums) == 3:
             return nums, None
         return None, "Нужны три числа через пробел: длина глубина высота, например 1190 1000 780."
-    if field in ("price", "old_price"):
-        if field == "old_price" and text.lower() in {"нет", "-", "0"}:
-            return 0, None
+    if field in ("price", "price_from"):
         value = _to_int(text)
         if value and value > 0:
             return value, None
@@ -360,19 +344,6 @@ async def cb_option(call: types.CallbackQuery, state: FSMContext) -> None:
     await _ask(call.message, state)
 
 
-@router.callback_query(F.data.startswith("tag:old:"), TagForm.ask)
-async def cb_old(call: types.CallbackQuery, state: FSMContext) -> None:
-    data = await state.get_data()
-    d = data["tag"]
-    if data.get("field") != "old_price":
-        await call.answer("Этот вопрос уже пройден")
-        return
-    _apply(d, "old_price", d["price_from"] if call.data.endswith("from") else None)
-    await state.update_data(tag=d)
-    await call.answer()
-    await _ask(call.message, state)
-
-
 @router.callback_query(F.data == "tag:skip", TagForm.ask)
 async def cb_skip(call: types.CallbackQuery, state: FSMContext) -> None:
     data = await state.get_data()
@@ -410,17 +381,12 @@ async def cb_edit(call: types.CallbackQuery, state: FSMContext) -> None:
     d = data["tag"]
     await state.update_data(field=field)
     await call.answer()
-    if field == "old_price":
+    if field == "price_from":
         builder = InlineKeyboardBuilder()
-        if d["price_from"]:
-            builder.row(
-                InlineKeyboardButton(text=f"Цена «от» по прайсу: {money(d['price_from'])}", callback_data="tag:setold:from")
-            )
-        builder.row(InlineKeyboardButton(text="🚫 Убрать зачёркнутую цену", callback_data="tag:setold:none"))
+        if d["list_price"]:
+            builder.row(InlineKeyboardButton(text=f"Вернуть по прайсу: {money(d['list_price'])}", callback_data="tag:setlist"))
         builder.row(InlineKeyboardButton(text="⬅ К ценнику", callback_data="tag:back"))
-        await call.message.answer(
-            "Введите зачёркнутую (старую) цену числом, или выберите вариант:", reply_markup=builder.as_markup()
-        )
+        await call.message.answer("Введите цену «от» (крупная цена) числом:", reply_markup=builder.as_markup())
         return
     prompts = {
         "title": "Введите новое название:",
@@ -428,7 +394,7 @@ async def cb_edit(call: types.CallbackQuery, state: FSMContext) -> None:
         "article": "Введите артикул:",
         "frame": "Введите материал каркаса:",
         "filler": "Введите наполнитель:",
-        "price": "Введите цену образца, руб.:",
+        "price": "Введите цену образца, руб. (печатается мелко сверху):",
     }
     builder = InlineKeyboardBuilder()
     if field in ("frame", "filler"):
@@ -450,10 +416,10 @@ async def cb_setopt(call: types.CallbackQuery, state: FSMContext) -> None:
     await _preview(call.message, state)
 
 
-@router.callback_query(F.data.startswith("tag:setold:"), TagForm.edit)
-async def cb_setold(call: types.CallbackQuery, state: FSMContext) -> None:
+@router.callback_query(F.data == "tag:setlist", TagForm.edit)
+async def cb_setlist(call: types.CallbackQuery, state: FSMContext) -> None:
     d = (await state.get_data())["tag"]
-    _apply(d, "old_price", d["price_from"] if call.data.endswith("from") else None)
+    _apply(d, "price_from", d["list_price"])
     await state.update_data(tag=d)
     await call.answer()
     await _preview(call.message, state)
@@ -476,8 +442,6 @@ async def msg_edit(message: types.Message, state: FSMContext) -> None:
     if error:
         await message.answer(error)
         return
-    if field == "old_price" and value == 0:
-        value = None
     _apply(d, field, value)
     await state.update_data(tag=d)
     # название, введённое вручную, продолжает вопросы; остальное — назад к ценнику
