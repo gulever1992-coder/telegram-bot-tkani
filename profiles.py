@@ -14,6 +14,28 @@ FOOTER = "Эти данные подставляются в КП. Изменит
 FIELDS = [("name", "ФИО"), ("phone", "Телефон"), ("telegram", "Telegram"), ("showroom", "Шоу-рум")]
 DEFAULT_SHOWROOM = "Флагманский шоу-рум Creatica · г. Москва, Новодевичий проезд, д. 2"
 
+# Шоу-румы Creatica (названия — как в отчётах компании)
+SHOWROOMS = ["Новодевичий", "Румянцево", "Румер", "Мебель сити", "B2B"]
+_ALIASES = [("новодевич", "Новодевичий"), ("румянц", "Румянцево"), ("румер", "Румер"),
+            ("мебель сити", "Мебель сити"), ("мебель-сити", "Мебель сити"), ("b2b", "B2B"), ("б2б", "B2B")]
+
+
+def norm_showroom(text: str) -> str:
+    """Приводит написанное как попало («ТЦ Румер», «новодевичий пр.») к каноническому названию."""
+    low = (text or "").lower()
+    for key, name in _ALIASES:
+        if key in low:
+            return name
+    return (text or "").strip()
+
+
+def footer_text(value: str) -> str:
+    """Как шоу-рум подписывается в подвале КП."""
+    name = norm_showroom(value)
+    if name == "Новодевичий":
+        return DEFAULT_SHOWROOM
+    return f"Creatica · {name}" if name else DEFAULT_SHOWROOM
+
 _cache: dict[int, dict | None] = {}
 
 
@@ -32,6 +54,8 @@ def parse(text: str) -> dict | None:
         if sep and label in labels:
             value = value.strip()
             profile[labels[label]] = "" if value == "—" else value
+    if profile.get("showroom"):
+        profile["showroom"] = norm_showroom(profile["showroom"])
     return profile if profile.get("name") else None
 
 

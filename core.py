@@ -26,15 +26,17 @@ from refund_flow import router as refund_router
 from tag_flow import router as tag_router
 from kp_flow import router as kp_router
 from onboarding import ProfileGate, router as onb_router
+from quickmenu import router as quick_router
 from utils import images as legacy_images
 from utils import nano, sheets
 from utils.agency import AgencyData, build_agency_package
 
-WELCOME_TEXT = "👋 Привет! Я рабочий бот-помощник.\n\nВыберите действие в меню ниже:"
+WELCOME_TEXT = "👋 Привет! Я рабочий бот-помощник.\n\nВыберите действие в меню внизу 👇"
 router = Router()
 dp = Dispatcher()
 dp.message.outer_middleware(ProfileGate())
 dp.callback_query.outer_middleware(ProfileGate())
+dp.include_router(quick_router)
 dp.include_router(onb_router)
 dp.include_router(router)
 dp.include_router(refund_router)
@@ -58,13 +60,17 @@ def secret_token() -> str:
 @router.message(CommandStart())
 async def cmd_start(message: types.Message, state: FSMContext) -> None:
     await state.clear()
-    await message.answer(WELCOME_TEXT, reply_markup=kb.main_menu())
+    await message.answer(WELCOME_TEXT, reply_markup=kb.reply_menu())
 
 
 @router.callback_query(F.data == "menu:home")
 async def cb_home(call: types.CallbackQuery, state: FSMContext) -> None:
     await state.clear()
-    await show(call.message, WELCOME_TEXT, reply_markup=kb.main_menu())
+    try:
+        await call.message.delete()
+    except Exception:  # noqa: BLE001 — сообщение уже удалено или слишком старое
+        pass
+    await call.message.answer(WELCOME_TEXT, reply_markup=kb.reply_menu())
     await call.answer()
 
 
@@ -521,7 +527,6 @@ async def _finish(target: types.Message, state: FSMContext, date: dt.date) -> No
     await target.answer_document(
         document=document,
         caption=f"Готово! Договор № {data.number}: договор, реквизиты, отчёт, счёт и акт.",
-        reply_markup=kb.main_menu(),
     )
     await status.delete()
     await state.clear()

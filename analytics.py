@@ -78,7 +78,7 @@ def track(
         "ts": int(time.time()),
         "uid": uid,
         "name": prof.get("name", ""),
-        "showroom": prof.get("showroom", ""),
+        "showroom": profiles.norm_showroom(prof.get("showroom", "")),
         "kind": kind,
         "detail": detail,
         "data": data or {},

@@ -1,6 +1,26 @@
 import config
-from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
+from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, KeyboardButton, ReplyKeyboardMarkup
 from aiogram.utils.keyboard import InlineKeyboardBuilder
+
+
+MENU_ITEMS = [
+    ("🔎 Найти ткань", "search"), ("📄 Прайс онлайн", "price"),
+    ("🎨 Создать картинку", "image"), ("💵 Выплата дизайнеру", "payment"),
+    ("📝 Заявление на возврат", "refund"), ("🏷 Ценник на мебель", "tag"),
+    ("📋 Коммерческое предложение", "kp"), ("👤 Мой профиль", "profile"),
+]
+MENU_TEXT = dict(MENU_ITEMS)
+
+
+def is_menu_text(text: str | None) -> bool:
+    return (text or "").strip() in MENU_TEXT
+
+
+def reply_menu() -> ReplyKeyboardMarkup:
+    """Постоянное меню под полем ввода: две колонки, всегда на виду."""
+    rows = [[KeyboardButton(text=a[0]), KeyboardButton(text=b[0])] for a, b in zip(MENU_ITEMS[::2], MENU_ITEMS[1::2])]
+    return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True, is_persistent=True,
+                               input_field_placeholder="Выберите действие в меню")
 
 
 def main_menu() -> InlineKeyboardMarkup:

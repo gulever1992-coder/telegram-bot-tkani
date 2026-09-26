@@ -82,7 +82,7 @@ async def cmd_start(message: types.Message) -> None:
     if not _allowed(message.from_user):
         await message.answer("Доступ закрыт.")
         return
-    await message.answer("👋 <b>Creatica · панель владельца</b>\n" + HELP, reply_markup=menu_markup())
+    await message.answer("👋 <b>Creatica · панель владельца</b>\n" + HELP, reply_markup=reply_menu())
 
 
 async def _guard(message: types.Message) -> bool:
@@ -279,6 +279,12 @@ async def cb_pick_filter(call: types.CallbackQuery) -> None:
         return
     _, kind, period = call.data.split(":")
     period = period if period in PERIODS else "all"
+    text, markup = _picker(kind, period)
+    await call.message.edit_text(text, reply_markup=markup)
+    await call.answer()
+
+
+def _picker(kind: str, period: str) -> tuple[str, types.InlineKeyboardMarkup]:
     b = InlineKeyboardBuilder()
     if kind == "fm":
         rows = _people(period)
@@ -291,8 +297,43 @@ async def cb_pick_filter(call: types.CallbackQuery) -> None:
             b.row(InlineKeyboardButton(text=f"{name[:50]} — {n}", callback_data=f"a:kr:{key}:{period}"))
         text = f"🔍 <b>КП по шоу-руму — {PERIODS[period][0]}</b>\nВыберите шоу-рум:" if rows else "КП пока не оформляли."
     b.row(InlineKeyboardButton(text="⬅ Назад", callback_data=f"a:p:{period}"))
-    await call.message.edit_text(text, reply_markup=b.as_markup())
-    await call.answer()
+    return text, b.as_markup()
+
+
+# --- постоянное меню под полем ввода (две колонки) -------------------------------------------------
+
+ADMIN_MENU = [
+    ("📊 Сводка", "sum"), ("👥 Менеджеры", "mgr"),
+    ("🏬 Шоу-румы", "room"), ("📋 Последние КП", "kp"),
+    ("🔍 КП по менеджеру", "fm"), ("🔍 КП по шоу-руму", "fr"),
+    ("🕒 Лента действий", "feed"), ("📈 По дням", "days"),
+    ("📅 Период отчётов", "period"), ("ℹ Помощь", "help"),
+]
+ADMIN_TEXT = dict(ADMIN_MENU)
+PERIOD: dict[int, str] = {}  # выбранный период отчётов у каждого владельца
+
+
+def reply_menu() -> types.ReplyKeyboardMarkup:
+    rows = [[types.KeyboardButton(text=a[0]), types.KeyboardButton(text=b[0])] for a, b in zip(ADMIN_MENU[::2], ADMIN_MENU[1::2])]
+    return types.ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True, is_persistent=True,
+                                     input_field_placeholder="Выберите отчёт или напишите слово для поиска КП")
+
+
+async def on_admin_button(message: types.Message) -> None:
+    if not await _guard(message):
+        return
+    kind = ADMIN_TEXT[message.text.strip()]
+    period = PERIOD.get(message.from_user.id, "7")
+    if kind == "help":
+        await message.answer(HELP, reply_markup=reply_menu())
+    elif kind == "period":
+        await message.answer(f"📅 Период отчётов сейчас: <b>{PERIODS[period][0]}</b>. Выберите другой:",
+                             reply_markup=menu_markup(period))
+    elif kind in ("fm", "fr"):
+        text, markup = _picker(kind, period)
+        await message.answer(text, reply_markup=markup)
+    else:
+        await message.answer(REPORTS[kind](period), reply_markup=menu_markup(period))
 
 
 @router.callback_query(F.data.regexp(r"^a:k[mr]:"))
@@ -371,6 +412,7 @@ async def cb_report(call: types.CallbackQuery) -> None:
         kind = "sum"
     if period not in PERIODS:
         period = "7"
+    PERIOD[call.from_user.id] = period
     text = REPORTS[kind](period)
     try:
         await call.message.edit_text(text, reply_markup=menu_markup(period))
@@ -390,5 +432,7 @@ def _cmd(kind: str):
 for _name, _kind in (("stats", "sum"), ("managers", "mgr"), ("rooms", "room"), ("kp", "kp"), ("feed", "feed")):
     router.message.register(_cmd(_kind), Command(_name))
 
-# любой текст (не команда) — поиск КП по менеджеру / шоу-руму / заказчику / номеру
+# кнопки меню — раньше поиска
+router.message.register(on_admin_button, F.text.in_(ADMIN_TEXT.keys()))
+# любой другой текст (не команда) — поиск КП по менеджеру / шоу-руму / заказчику / номеру
 router.message.register(_search, F.text, ~F.text.startswith("/"))

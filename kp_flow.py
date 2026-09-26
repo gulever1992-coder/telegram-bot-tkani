@@ -68,7 +68,7 @@ def _build(k: dict) -> KP:
         ))
     return KP(
         kind={"vis": "visual"}.get(k["kind"], "standard"), customer=k["customer"], manager=k["manager"], phone=k["phone"],
-        telegram=k.get("telegram", ""), showroom=k.get("showroom", ""),
+        telegram=k.get("telegram", ""), showroom=profiles.footer_text(k.get("showroom", "")),
         date=now.date(), valid_days=k["valid_days"], number=f"{now:%d%m}-{now:%H%M}", items=items,
         production=k["production"], services=k["services"],
         payments=[p for p, on in zip(PAYMENTS, k["payments"]) if on],
@@ -671,7 +671,7 @@ async def cb_make(call: types.CallbackQuery, state: FSMContext) -> None:
         caption=(
             f"📋 КП №{kp.number}\n"
             f"👤 Менеджер: {kp.manager or '—'}" + (f" · {contacts}" if contacts else "") + "\n"
-            f"🏬 Шоу-рум: {kp.showroom or '—'}\n"
+            f"🏬 Шоу-рум: {profiles.norm_showroom(k.get('showroom', '')) or '—'}\n"
             f"Заказчик: {kp.customer or '—'}\n"
             f"Позиций: {len(kp.items)} · Итого: {rub(kp.total())}"
         ),

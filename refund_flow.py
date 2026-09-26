@@ -187,7 +187,6 @@ async def _finish(target: types.Message, state: FSMContext) -> None:
     await target.answer_document(
         BufferedInputFile(pdf.read(), filename=name),
         caption=f"Готово! Заявление на возврат: {label}, {kind_ru}.",
-        reply_markup=kb.main_menu(),
     )
     await status.delete()
     await state.clear()

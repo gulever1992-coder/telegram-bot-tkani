@@ -101,11 +101,15 @@ async def ask(target: types.Message, state: FSMContext, step: str, user: types.U
                             reply_markup=_skip_markup(extra))
     elif step == "showroom":
         await state.set_state(Onb.showroom)
-        extra = [("🏬 Флагманский, Новодевичий пр., 2", "onb:sr:default")]
-        if old.get("showroom") and old["showroom"] != profiles.DEFAULT_SHOWROOM:
-            extra.append((f"Оставить: {old['showroom'][:40]}", "onb:keep"))
-        await target.answer("4️⃣ <b>Ваш шоу-рум</b> — выберите или напишите название и адрес:",
-                            reply_markup=_skip_markup(extra))
+        b = InlineKeyboardBuilder()
+        names = profiles.SHOWROOMS
+        for i in range(0, len(names), 2):
+            b.row(*[InlineKeyboardButton(text=f"🏬 {n}", callback_data=f"onb:sr:{i + j}")
+                    for j, n in enumerate(names[i:i + 2])])
+        if old.get("showroom") and old["showroom"] not in names:
+            b.row(InlineKeyboardButton(text=f"Оставить: {old['showroom'][:40]}", callback_data="onb:keep"))
+        await target.answer("4️⃣ <b>Ваш шоу-рум</b> — выберите кнопкой (или напишите название, если другого нет в списке):",
+                            reply_markup=b.as_markup())
 
 
 ORDER = ["name", "phone", "telegram", "showroom"]
@@ -129,7 +133,8 @@ async def _finish(target: types.Message, state: FSMContext, user: types.User) ->
     saved = await profiles.save(target.bot, user.id, data["profile"])
     await state.clear()
     await target.answer("✅ Готово, данные сохранены.", reply_markup=ReplyKeyboardRemove())
-    await target.answer(profiles.render(saved).split("\n\n")[0], reply_markup=kb.main_menu())
+    await target.answer(profiles.render(saved).split("\n\n")[0])
+    await target.answer("Выберите действие в меню внизу 👇", reply_markup=kb.reply_menu())
     analytics.track(user.id, "register" if was_new else "profile", saved.get("name", ""))
 
 
@@ -177,7 +182,7 @@ class ProfileGate(BaseMiddleware):
 
 @router.message(Onb.name, F.text)
 async def msg_name(message: types.Message, state: FSMContext) -> None:
-    name = norm_name(message.text)
+    name = None if kb.is_menu_text(message.text) else norm_name(message.text)
     if not name:
         await message.answer("Напишите ФИО буквами, например: Иванов Пётр Сергеевич.")
         return
@@ -216,7 +221,7 @@ async def msg_showroom(message: types.Message, state: FSMContext) -> None:
     if len(text) < 3:
         await message.answer("Напишите название и адрес шоу-рума.")
         return
-    await _advance(message, state, message.from_user, "showroom", text)
+    await _advance(message, state, message.from_user, "showroom", profiles.norm_showroom(text))
 
 
 @router.callback_query(F.data == "onb:keep")
@@ -245,10 +250,14 @@ async def cb_tg_me(call: types.CallbackQuery, state: FSMContext) -> None:
     await _advance(call.message, state, call.from_user, "telegram", "@" + call.data[len("onb:tg:"):])
 
 
-@router.callback_query(F.data == "onb:sr:default", Onb.showroom)
-async def cb_showroom_default(call: types.CallbackQuery, state: FSMContext) -> None:
+@router.callback_query(F.data.regexp(r"^onb:sr:\d+$"), Onb.showroom)
+async def cb_showroom_pick(call: types.CallbackQuery, state: FSMContext) -> None:
+    i = int(call.data.split(":")[2])
+    if i >= len(profiles.SHOWROOMS):
+        await call.answer("Список устарел", show_alert=True)
+        return
     await call.answer()
-    await _advance(call.message, state, call.from_user, "showroom", profiles.DEFAULT_SHOWROOM)
+    await _advance(call.message, state, call.from_user, "showroom", profiles.SHOWROOMS[i])
 
 
 # --- меню «Мой профиль» -------------------------------------------------------------------
