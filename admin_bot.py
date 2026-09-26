@@ -5,7 +5,9 @@
 
 from __future__ import annotations
 
+import asyncio
 import datetime as dt
+import zlib
 from collections import Counter, defaultdict
 from html import escape
 
@@ -58,11 +60,15 @@ def menu_markup(period: str = "7") -> types.InlineKeyboardMarkup:
           InlineKeyboardButton(text="📋 Последние КП", callback_data=f"a:kp:{period}"))
     b.row(InlineKeyboardButton(text="🕒 Лента действий", callback_data=f"a:feed:{period}"),
           InlineKeyboardButton(text="📈 По дням", callback_data=f"a:days:{period}"))
+    b.row(InlineKeyboardButton(text="🔍 КП по менеджеру", callback_data=f"a:fm:{period}"),
+          InlineKeyboardButton(text="🔍 КП по шоу-руму", callback_data=f"a:fr:{period}"))
     return b.as_markup()
 
 
 HELP = ("Выберите период и раздел ниже. Сами КП приходят сюда сразу, как менеджер их оформил.\n"
-        "Команды: /stats — сводка, /managers, /rooms, /kp, /feed.")
+        "🔍 <b>Поиск КП:</b> кнопки «КП по менеджеру» / «КП по шоу-руму» — либо просто напишите слово "
+        "(например: <i>новодевичий</i>, <i>румер</i>, фамилию менеджера или заказчика).\n"
+        "Команды: /stats, /managers, /rooms, /kp, /feed.")
 
 
 @router.message(CommandStart())
@@ -197,7 +203,165 @@ REPORTS = {"sum": report_summary, "mgr": report_managers, "room": report_rooms,
            "kp": report_kp, "feed": report_feed, "days": report_days}
 
 
-@router.callback_query(F.data.startswith("a:"))
+# --- фильтры КП: по менеджеру, по шоу-руму, по слову -----------------------------------------------
+
+LAST_QUERY: dict[int, str] = {}  # последний текстовый поиск владельца (для кнопки «прислать файлы»)
+MAX_FILES = 10
+
+
+def room_key(name: str) -> str:
+    return format(zlib.crc32((name or "").encode("utf-8")) & 0xFFFFFFFF, "08x")
+
+
+def kp_events(period: str, *, uid: int | None = None, room: str | None = None, query: str | None = None) -> list[dict]:
+    days = PERIODS.get(period, PERIODS["all"])[1]
+    out = [e for e in since(days) if e["kind"] == "kp"]
+    if uid is not None:
+        out = [e for e in out if e["uid"] == uid]
+    if room is not None:
+        out = [e for e in out if room_key(e.get("showroom", "")) == room]
+    if query:
+        q = query.lower().strip()
+        out = [e for e in out if q in " ".join([
+            e.get("name", ""), e.get("showroom", ""), str(e["data"].get("customer", "")), str(e["data"].get("number", "")),
+        ]).lower()]
+    return sorted(out, key=lambda e: -e["ts"])
+
+
+def kp_list_text(title: str, events: list[dict], period: str) -> str:
+    label = PERIODS[period][0]
+    if not events:
+        return f"{title} — {label}\n\nКП не найдено."
+    total = sum(e["data"].get("sum", 0) for e in events)
+    lines = [f"{title} — {label}", f"Найдено КП: <b>{len(events)}</b> на <b>{rub(total)}</b>"]
+    for e in events[:15]:
+        d = e["data"]
+        room = (e.get("showroom") or "—").split("·")[-1].strip()[:36]
+        lines.append(
+            f"\n{fmt_time(e['ts'])} · <b>{who(e)}</b> · {escape(room)}\n"
+            f"  №{escape(str(d.get('number', '')))} · {escape(str(d.get('customer') or 'без заказчика'))} · "
+            f"{d.get('items', 0)} поз. · {rub(d.get('sum', 0))}"
+        )
+    if len(events) > 15:
+        lines.append(f"\n<i>Показаны последние 15 из {len(events)}.</i>")
+    return "\n".join(lines)[:4000]
+
+
+def kp_list_markup(events: list[dict], send_cb: str, back_cb: str, period: str) -> types.InlineKeyboardMarkup:
+    b = InlineKeyboardBuilder()
+    with_files = [e for e in events if e["data"].get("msg")]
+    if with_files:
+        n = min(len(with_files), MAX_FILES)
+        b.row(InlineKeyboardButton(text=f"📎 Прислать файлы КП ({n})", callback_data=send_cb))
+    b.row(InlineKeyboardButton(text="⬅ Назад", callback_data=back_cb),
+          InlineKeyboardButton(text="🏠 Меню", callback_data=f"a:p:{period}"))
+    return b.as_markup()
+
+
+def _people(period: str) -> list[tuple[int, str, int]]:
+    by: dict[int, list[dict]] = defaultdict(list)
+    for e in kp_events(period):
+        by[e["uid"]].append(e)
+    return sorted(((uid, who(max(v, key=lambda e: e["ts"])), len(v)) for uid, v in by.items()), key=lambda r: -r[2])
+
+
+def _rooms(period: str) -> list[tuple[str, str, int]]:
+    by: dict[str, list[dict]] = defaultdict(list)
+    for e in kp_events(period):
+        by[e.get("showroom") or ""].append(e)
+    return sorted(((room_key(r), r or "Не указан", len(v)) for r, v in by.items()), key=lambda x: -x[2])
+
+
+@router.callback_query(F.data.regexp(r"^a:f[mr]:"))
+async def cb_pick_filter(call: types.CallbackQuery) -> None:
+    if not _allowed(call.from_user):
+        await call.answer("Доступ закрыт", show_alert=True)
+        return
+    _, kind, period = call.data.split(":")
+    period = period if period in PERIODS else "all"
+    b = InlineKeyboardBuilder()
+    if kind == "fm":
+        rows = _people(period)
+        for uid, name, n in rows[:30]:
+            b.row(InlineKeyboardButton(text=f"{name} — {n}", callback_data=f"a:km:{uid}:{period}"))
+        text = f"🔍 <b>КП по менеджеру — {PERIODS[period][0]}</b>\nВыберите менеджера:" if rows else "КП пока не оформляли."
+    else:
+        rows = _rooms(period)
+        for key, name, n in rows[:30]:
+            b.row(InlineKeyboardButton(text=f"{name[:50]} — {n}", callback_data=f"a:kr:{key}:{period}"))
+        text = f"🔍 <b>КП по шоу-руму — {PERIODS[period][0]}</b>\nВыберите шоу-рум:" if rows else "КП пока не оформляли."
+    b.row(InlineKeyboardButton(text="⬅ Назад", callback_data=f"a:p:{period}"))
+    await call.message.edit_text(text, reply_markup=b.as_markup())
+    await call.answer()
+
+
+@router.callback_query(F.data.regexp(r"^a:k[mr]:"))
+async def cb_kp_filtered(call: types.CallbackQuery) -> None:
+    if not _allowed(call.from_user):
+        await call.answer("Доступ закрыт", show_alert=True)
+        return
+    _, kind, key, period = call.data.split(":")
+    period = period if period in PERIODS else "all"
+    if kind == "km":
+        events = kp_events(period, uid=int(key))
+        title = f"📋 <b>КП менеджера {who(events[0]) if events else ''}</b>"
+        send, back = f"a:sm:{key}:{period}", f"a:fm:{period}"
+    else:
+        events = kp_events(period, room=key)
+        room = events[0].get("showroom") if events else ""
+        title = f"📋 <b>КП шоу-рума {escape(room or 'не указан')}</b>"
+        send, back = f"a:sr:{key}:{period}", f"a:fr:{period}"
+    await call.message.edit_text(kp_list_text(title, events, period), reply_markup=kp_list_markup(events, send, back, period))
+    await call.answer()
+
+
+async def _send_files(call_or_msg, events: list[dict]) -> int:
+    """Пересылает владельцу файлы КП (копией сообщений из этого же чата)."""
+    bot = call_or_msg.bot
+    chat = call_or_msg.from_user.id
+    sent = 0
+    for e in [e for e in events if e["data"].get("msg")][:MAX_FILES][::-1]:  # старые -> новые
+        try:
+            await bot.copy_message(chat, chat, e["data"]["msg"])
+            sent += 1
+            await asyncio.sleep(0.4)
+        except Exception:  # noqa: BLE001 — сообщение могли удалить из чата
+            continue
+    return sent
+
+
+@router.callback_query(F.data.regexp(r"^a:s[mrq]:"))
+async def cb_send(call: types.CallbackQuery) -> None:
+    if not _allowed(call.from_user):
+        await call.answer("Доступ закрыт", show_alert=True)
+        return
+    parts = call.data.split(":")
+    kind, period = parts[1], parts[-1]
+    period = period if period in PERIODS else "all"
+    if kind == "sm":
+        events = kp_events(period, uid=int(parts[2]))
+    elif kind == "sr":
+        events = kp_events(period, room=parts[2])
+    else:
+        events = kp_events(period, query=LAST_QUERY.get(call.from_user.id, ""))
+    await call.answer("Присылаю файлы…")
+    n = await _send_files(call, events)
+    if not n:
+        await call.message.answer("Файлы этих КП недоступны (старые записи или сообщения удалены из чата).")
+
+
+async def _search(message: types.Message) -> None:
+    if not await _guard(message):
+        return
+    query = message.text.strip()
+    LAST_QUERY[message.from_user.id] = query
+    events = kp_events("all", query=query)
+    title = f"🔍 <b>КП по запросу «{escape(query[:40])}»</b>"
+    await message.answer(kp_list_text(title, events, "all"),
+                         reply_markup=kp_list_markup(events, "a:sq:all", "a:p:all", "all"))
+
+
+@router.callback_query(F.data.regexp(r"^a:(p|sum|mgr|room|kp|feed|days):"))
 async def cb_report(call: types.CallbackQuery) -> None:
     if not _allowed(call.from_user):
         await call.answer("Доступ закрыт", show_alert=True)
@@ -225,3 +389,6 @@ def _cmd(kind: str):
 
 for _name, _kind in (("stats", "sum"), ("managers", "mgr"), ("rooms", "room"), ("kp", "kp"), ("feed", "feed")):
     router.message.register(_cmd(_kind), Command(_name))
+
+# любой текст (не команда) — поиск КП по менеджеру / шоу-руму / заказчику / номеру
+router.message.register(_search, F.text, ~F.text.startswith("/"))

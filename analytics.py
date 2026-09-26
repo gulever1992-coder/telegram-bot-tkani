@@ -85,18 +85,20 @@ def track(
     }
     EVENTS.append(event)
     try:
-        _spawn(_after(document, caption))
+        _spawn(_after(event, document, caption))
     except RuntimeError:  # нет запущенного цикла (тесты)
         pass
 
 
-async def _after(document: tuple[bytes, str] | None, caption: str) -> None:
+async def _after(event: dict, document: tuple[bytes, str] | None, caption: str) -> None:
     if document:
-        for chat in config.ADMIN_CHAT_IDS:
+        for i, chat in enumerate(config.ADMIN_CHAT_IDS):
             try:
-                await _admin_bot.send_document(
+                sent = await _admin_bot.send_document(
                     chat, BufferedInputFile(document[0], filename=document[1]), caption=caption[:1020]
                 )
+                if i == 0:  # по этому id админ-бот потом перепришлёт файл КП по фильтру
+                    event["data"]["msg"] = sent.message_id
             except TelegramAPIError as exc:
                 log.warning("не удалось переслать КП владельцу %s: %s", chat, exc)
     _persist_soon()
