@@ -27,6 +27,7 @@ LOG_CAPTION = "🗄 Служебный журнал событий — не уд
 KINDS = {
     "kp": "📋 КП",
     "tag": "🏷 Ценники",
+    "pipeline": "📈 Сделки",
     "refund": "📝 Возвраты",
     "payout": "💵 Выплаты дизайнерам",
     "search": "🔎 Поиск ткани",
@@ -102,6 +103,39 @@ async def _after(event: dict, document: tuple[bytes, str] | None, caption: str) 
             except TelegramAPIError as exc:
                 log.warning("не удалось переслать КП владельцу %s: %s", chat, exc)
     _persist_soon()
+
+
+def notify(text: str) -> None:
+    """Отправляет владельцу обычное сообщение (не документ), при необходимости — несколькими частями."""
+    if not enabled():
+        return
+    try:
+        _spawn(_notify_after(text))
+    except RuntimeError:  # нет запущенного цикла (тесты)
+        pass
+
+
+async def _notify_after(text: str) -> None:
+    for chat in config.ADMIN_CHAT_IDS:
+        for chunk in _split(text, 3500):
+            try:
+                await _admin_bot.send_message(chat, chunk)
+            except TelegramAPIError as exc:
+                log.warning("не удалось отправить сообщение владельцу %s: %s", chat, exc)
+
+
+def _split(text: str, limit: int) -> list[str]:
+    chunks: list[str] = []
+    cur = ""
+    for line in text.split("\n"):
+        if cur and len(cur) + len(line) + 1 > limit:
+            chunks.append(cur)
+            cur = line
+        else:
+            cur = f"{cur}\n{line}" if cur else line
+    if cur:
+        chunks.append(cur)
+    return chunks or [text]
 
 
 def _persist_soon(delay: float = 8.0) -> None:

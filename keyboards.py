@@ -7,7 +7,8 @@ MENU_ITEMS = [
     ("🔎 Найти ткань", "search"), ("📄 Прайс онлайн", "price"),
     ("🎨 Создать картинку", "image"), ("💵 Выплата дизайнеру", "payment"),
     ("📝 Заявление на возврат", "refund"), ("🏷 Ценник на мебель", "tag"),
-    ("📋 Коммерческое предложение", "kp"), ("👤 Мой профиль", "profile"),
+    ("📋 Коммерческое предложение", "kp"), ("📄 Мои КП", "mykp"),
+    ("📈 Мои сделки", "pipeline"), ("👤 Мой профиль", "profile"),
 ]
 MENU_TEXT = dict(MENU_ITEMS)
 
@@ -18,8 +19,11 @@ def is_menu_text(text: str | None) -> bool:
 
 def reply_menu() -> ReplyKeyboardMarkup:
     """Постоянное меню под полем ввода: две колонки, всегда на виду."""
-    rows = [[KeyboardButton(text=a[0]), KeyboardButton(text=b[0])] for a, b in zip(MENU_ITEMS[::2], MENU_ITEMS[1::2])]
-    return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True, is_persistent=True,
+    rows = [list(pair) for pair in zip(MENU_ITEMS[::2], MENU_ITEMS[1::2])]
+    if len(MENU_ITEMS) % 2:
+        rows.append([MENU_ITEMS[-1]])
+    keyboard = [[KeyboardButton(text=item[0]) for item in row] for row in rows]
+    return ReplyKeyboardMarkup(keyboard=keyboard, resize_keyboard=True, is_persistent=True,
                                input_field_placeholder="Выберите действие в меню")
 
 
@@ -32,6 +36,8 @@ def main_menu() -> InlineKeyboardMarkup:
     builder.row(InlineKeyboardButton(text="📝 Заявление на возврат", callback_data="menu:refund"))
     builder.row(InlineKeyboardButton(text="🏷 Ценник на мебель", callback_data="menu:tag"))
     builder.row(InlineKeyboardButton(text="📋 Коммерческое предложение", callback_data="menu:kp"))
+    builder.row(InlineKeyboardButton(text="📄 Мои КП", callback_data="menu:mykp"))
+    builder.row(InlineKeyboardButton(text="📈 Мои сделки", callback_data="menu:pipeline"))
     builder.row(InlineKeyboardButton(text="👤 Мой профиль", callback_data="menu:profile"))
     return builder.as_markup()
 

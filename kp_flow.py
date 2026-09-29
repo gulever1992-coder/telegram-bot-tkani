@@ -75,6 +75,41 @@ def _build(k: dict) -> KP:
     )
 
 
+def _json_safe(k: dict) -> dict:
+    """k без фото (bytes) — компактный слепок для истории КП (пишется в общий журнал)."""
+
+    def item_safe(it: dict) -> dict:
+        base = {f: it[f] for f in ("title", "qty", "size", "material", "link", "unit_price", "discount")}
+        base["alt"] = (
+            {f: it["alt"][f] for f in ("title", "size", "material", "link", "unit_price")}
+            if it.get("alt") else None
+        )
+        return base
+
+    return {
+        "kind": k["kind"], "customer": k["customer"], "production": k["production"], "services": k["services"],
+        "valid_days": k["valid_days"], "payments": k["payments"], "items": [item_safe(it) for it in k["items"]],
+    }
+
+
+def _from_history(uid: int, st: dict) -> dict:
+    """Восстанавливает редактируемое состояние КП из слепка истории (без фото — их нужно прикрепить заново)."""
+    k = _kp_new(profiles.get(uid))
+    for f in ("kind", "customer", "production", "services", "valid_days", "payments"):
+        if f in st:
+            k[f] = st[f]
+    items = []
+    for it in st.get("items", []):
+        item = {**_item_new(), **{f: it[f] for f in ("title", "qty", "size", "material", "link", "unit_price", "discount")}}
+        if it.get("alt"):
+            a = it["alt"]
+            item["alt"] = {"title": a["title"], "size": a["size"], "material": a["material"], "link": a["link"],
+                           "unit_price": a["unit_price"], "photo": None, "default": {}}
+        items.append(item)
+    k["items"] = items
+    return k
+
+
 def _dims(item: pricelist.Item) -> str:
     nums = list(item.dims) if item.dims else re.findall(r"\d+", item.size_raw or "")[:3]
     return "×".join(str(n) for n in nums)
@@ -254,7 +289,10 @@ async def _apply(target: types.Message, state: FSMContext, uid: int, value: str 
         if value == "last":
             name, phone = LAST_MANAGER.get(uid, ("", ""))
             value = name if step == "manager" else phone
-        k[step] = value or ""
+        if empty and data["mode"] == "edit":
+            pass  # пропустили при правке уже заполненного поля — оставляем как было
+        else:
+            k[step] = value or ""
     elif step == "alt_query" and empty:
         c["alt"] = None
         queue[:] = [q for q in queue if not q.startswith("alt_")]
@@ -666,7 +704,7 @@ async def cb_make(call: types.CallbackQuery, state: FSMContext) -> None:
     analytics.track(
         call.message.chat.id, "kp", kp.customer,
         data={"sum": kp.total(), "items": len(kp.items), "number": kp.number, "customer": kp.customer,
-              "kind": kp.kind},
+              "kind": kp.kind, "state": _json_safe(k)},
         document=(pdf, filename),
         caption=(
             f"📋 КП №{kp.number}\n"
@@ -690,4 +728,55 @@ async def cb_make(call: types.CallbackQuery, state: FSMContext) -> None:
 @router.callback_query(F.data == "kp:back", KPForm.run)
 async def cb_back(call: types.CallbackQuery, state: FSMContext) -> None:
     await call.answer()
+    await _preview(call.message, state)
+
+
+# --- ранее созданные КП: список и повторное редактирование -------------------------------
+
+
+@router.callback_query(F.data == "menu:mykp")
+async def cb_my_kp(call: types.CallbackQuery, state: FSMContext) -> None:
+    await state.clear()
+    uid = call.from_user.id
+    mine = sorted(
+        (e for e in analytics.EVENTS if e.get("kind") == "kp" and e["uid"] == uid and e["data"].get("state")),
+        key=lambda e: -e["ts"],
+    )[:15]
+    b = InlineKeyboardBuilder()
+    if not mine:
+        b.row(InlineKeyboardButton(text="📋 Создать КП", callback_data="menu:kp"))
+        b.row(InlineKeyboardButton(text="🏠 В главное меню", callback_data="menu:home"))
+        await show(call.message, "📄 У вас пока нет оформленных КП.", reply_markup=b.as_markup())
+        await call.answer()
+        return
+    await state.update_data(history=mine)
+    for i, e in enumerate(mine):
+        d = e["data"]
+        label = f"№{d.get('number', '')} · {d.get('customer') or 'без заказчика'} · {rub(d.get('sum', 0))}"
+        b.row(InlineKeyboardButton(text=label[:64], callback_data=f"kp:hist:{i}"))
+    b.row(InlineKeyboardButton(text="🏠 В главное меню", callback_data="menu:home"))
+    await show(
+        call.message,
+        "📄 <b>Ваши КП</b> — выберите, чтобы поправить и выпустить заново:",
+        reply_markup=b.as_markup(),
+    )
+    await call.answer()
+
+
+@router.callback_query(F.data.startswith("kp:hist:"))
+async def cb_hist_open(call: types.CallbackQuery, state: FSMContext) -> None:
+    data = await state.get_data()
+    mine = data.get("history") or []
+    idx = int(call.data.split(":")[2])
+    if idx >= len(mine):
+        await call.answer("Список устарел, откройте «Мои КП» заново", show_alert=True)
+        return
+    k = _from_history(call.from_user.id, mine[idx]["data"]["state"])
+    await state.set_state(KPForm.run)
+    await state.update_data(kp=k, cur=None, mode="preview", queue=[], terms_done=True)
+    await call.answer()
+    await call.message.answer(
+        "✏ Открыто для правки. Фото позиций пришлось сбросить — при необходимости пришлите заново "
+        "(удалите позицию и добавьте её снова с фото)."
+    )
     await _preview(call.message, state)

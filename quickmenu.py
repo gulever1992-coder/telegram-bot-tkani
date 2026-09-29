@@ -62,6 +62,7 @@ async def on_menu_button(message: types.Message, state: FSMContext) -> None:
     import core
     import kp_flow
     import onboarding
+    import pipeline_flow
     import refund_flow
     import tag_flow
 
@@ -72,6 +73,8 @@ async def on_menu_button(message: types.Message, state: FSMContext) -> None:
         "refund": refund_flow.cb_refund,
         "tag": tag_flow.cb_tag,
         "kp": kp_flow.cb_kp,
+        "mykp": kp_flow.cb_my_kp,
+        "pipeline": pipeline_flow.cb_pipeline,
         "profile": onboarding.cb_profile,
     }
     await handlers[key](call, state)
