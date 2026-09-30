@@ -27,6 +27,7 @@ admin_dp = Dispatcher()
 admin_dp.include_router(router)
 
 PERIODS = {"1": ("Сегодня", 1), "7": ("7 дней", 7), "30": ("30 дней", 30), "all": ("Всё время", None)}
+DIGEST_HOUR = 9  # утренняя сводка — по Москве
 
 
 def make_admin_bot() -> Bot:
@@ -68,6 +69,8 @@ def menu_markup(period: str = "7") -> types.InlineKeyboardMarkup:
 HELP = ("Выберите период и раздел ниже. Сами КП приходят сюда сразу, как менеджер их оформил.\n"
         "🔍 <b>Поиск КП:</b> кнопки «КП по менеджеру» / «КП по шоу-руму» — либо просто напишите слово "
         "(например: <i>новодевичий</i>, <i>румер</i>, фамилию менеджера или заказчика).\n"
+        f"🌅 Каждое утро в {DIGEST_HOUR}:00 по Москве сюда приходит сводка за прошедший день — "
+        "кто чем пользовался и сколько раз.\n"
         "Команды: /stats, /managers, /rooms, /kp, /feed.")
 
 
@@ -203,6 +206,72 @@ REPORTS = {"sum": report_summary, "mgr": report_managers, "room": report_rooms,
            "kp": report_kp, "feed": report_feed, "days": report_days}
 
 
+# --- утренняя сводка (раз в сутки, автоматически) -------------------------------------------
+
+
+def daily_digest_text(day: dt.date) -> str:
+    start = dt.datetime.combine(day, dt.time.min, MSK).timestamp()
+    end = start + 86400
+    ev = [e for e in analytics.EVENTS if start <= e["ts"] < end]
+    label = day.strftime("%d.%m.%Y")
+    counts = Counter(e["kind"] for e in ev)
+    kps = [e for e in ev if e["kind"] == "kp"]
+    total = sum(e["data"].get("sum", 0) for e in kps)
+    managers = {e["uid"] for e in ev if e["kind"] not in ("register", "profile", "digest")}
+    lines = [f"🌅 <b>Сводка за {label}</b>", f"Активных менеджеров: <b>{len(managers)}</b>", ""]
+    for k, title in KINDS.items():
+        if counts.get(k):
+            lines.append(f"{title}: <b>{counts[k]}</b>")
+    if kps:
+        lines.append(f"Сумма оформленных КП: <b>{rub(total)}</b>")
+    if not ev:
+        lines.append("Действий не было.")
+    by: dict[int, list[dict]] = defaultdict(list)
+    for e in ev:
+        if e["kind"] not in ("register", "profile", "digest"):
+            by[e["uid"]].append(e)
+    if by:
+        lines += ["", "👥 <b>По менеджерам:</b>"]
+        for uid, items in sorted(by.items(), key=lambda kv: -len(kv[1])):
+            c = Counter(e["kind"] for e in items)
+            parts = [f"{KINDS[k].split(' ', 1)[1]} {n}" for k, n in c.most_common()]
+            lines.append(f"  {who(items[0])}: {' · '.join(parts)}")
+    return "\n".join(lines)[:4000]
+
+
+def _digest_sent(day: dt.date) -> bool:
+    tag = day.isoformat()
+    return any(e["kind"] == "digest" and e.get("detail") == tag for e in analytics.EVENTS)
+
+
+async def _send_digest(bot: Bot, day: dt.date) -> None:
+    text = daily_digest_text(day)
+    for chat in config.ADMIN_CHAT_IDS:
+        try:
+            await bot.send_message(chat, text)
+        except Exception:  # noqa: BLE001
+            pass
+    analytics.track(0, "digest", day.isoformat())
+
+
+async def digest_loop(bot: Bot) -> None:
+    """Раз в сутки, около 9:00 по Москве, шлёт владельцу сводку за прошедший день.
+
+    Проверяем каждые 10 минут (а не спим точно до 9:00), чтобы пережить перезапуски бота
+    на GitHub Actions без риска пропустить момент отправки.
+    """
+    while True:
+        try:
+            now = dt.datetime.now(MSK)
+            if now.hour == DIGEST_HOUR:
+                yesterday = (now - dt.timedelta(days=1)).date()
+                if not _digest_sent(yesterday):
+                    await _send_digest(bot, yesterday)
+        except Exception:  # noqa: BLE001 — сводка не должна ронять бота
+            pass
+        await asyncio.sleep(600)
+
+
 # --- фильтры КП: по менеджеру, по шоу-руму, по слову -----------------------------------------------
 
 LAST_QUERY: dict[int, str] = {}  # последний текстовый поиск владельца (для кнопки «прислать файлы»)
@@ -307,7 +376,8 @@ ADMIN_MENU = [
     ("🏬 Шоу-румы", "room"), ("📋 Последние КП", "kp"),
     ("🔍 КП по менеджеру", "fm"), ("🔍 КП по шоу-руму", "fr"),
     ("🕒 Лента действий", "feed"), ("📈 По дням", "days"),
-    ("📅 Период отчётов", "period"), ("ℹ Помощь", "help"),
+    ("📅 Период отчётов", "period"), ("🌅 Сводка за вчера", "digest"),
+    ("ℹ Помощь", "help"),
 ]
 ADMIN_TEXT = dict(ADMIN_MENU)
 PERIOD: dict[int, str] = {}  # выбранный период отчётов у каждого владельца
@@ -326,6 +396,9 @@ async def on_admin_button(message: types.Message) -> None:
     period = PERIOD.get(message.from_user.id, "7")
     if kind == "help":
         await message.answer(HELP, reply_markup=reply_menu())
+    elif kind == "digest":
+        yesterday = (dt.datetime.now(MSK) - dt.timedelta(days=1)).date()
+        await message.answer(daily_digest_text(yesterday), reply_markup=reply_menu())
     elif kind == "period":
         await message.answer(f"📅 Период отчётов сейчас: <b>{PERIODS[period][0]}</b>. Выберите другой:",
                              reply_markup=menu_markup(period))

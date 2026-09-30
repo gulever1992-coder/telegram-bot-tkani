@@ -21,7 +21,7 @@ async def main() -> None:
 
     admin_bot = None
     if config.ADMIN_BOT_TOKEN:
-        from admin_bot import admin_dp, make_admin_bot
+        from admin_bot import admin_dp, digest_loop, make_admin_bot
 
         admin_bot = make_admin_bot()
         analytics.configure(admin_bot)
@@ -30,6 +30,7 @@ async def main() -> None:
             loaded = await analytics.load()
             log.info("Админ-бот включён, событий в журнале: %s", loaded)
             tasks.append(asyncio.create_task(admin_dp.start_polling(admin_bot, handle_signals=False), name="admin-bot"))
+            tasks.append(asyncio.create_task(digest_loop(admin_bot), name="digest-loop"))
         except Exception:  # noqa: BLE001 — сбой админ-бота не должен ронять основной
             log.exception("Админ-бот не запустился, продолжаю без него")
             analytics.configure(None)

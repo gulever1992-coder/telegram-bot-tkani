@@ -15,6 +15,7 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 import analytics
 import keyboards as kb
+import onboarding
 import profiles
 from utils import pricelist
 from utils.kp import KP, KPItem, PAYMENTS, build_kp_pdf, build_kp_preview, date_ru, prep_photo, rub
@@ -29,7 +30,7 @@ class KPForm(StatesGroup):
     run = State()
 
 
-HEAD = ["kind", "customer"]  # менеджер, телефон, Telegram и шоу-рум берутся из профиля
+HEAD = ["kind", "customer", "customer_phone"]  # менеджер, его телефон, Telegram, шоу-рум — из профиля
 ITEM_STD = ["query", "qty", "size", "material", "link", "price", "discount", "photo"]
 ITEM_VIS = ["title", "qty", "size", "material", "price", "discount", "photo",
             "alt_query", "alt_size", "alt_material", "alt_link", "alt_price", "alt_photo"]
@@ -42,7 +43,7 @@ TERMS = ["production", "services", "valid", "payments"]
 def _kp_new(profile: dict | None = None) -> dict:
     p = profile or {}
     return {
-        "kind": "", "customer": "", "manager": p.get("name", ""), "phone": p.get("phone", ""),
+        "kind": "", "customer": "", "customer_phone": "", "manager": p.get("name", ""), "phone": p.get("phone", ""),
         "telegram": p.get("telegram", ""), "showroom": p.get("showroom", ""), "items": [],
         "production": "55 рабочих дней", "services": "По согласованию",
         "valid_days": 7, "payments": [True] * len(PAYMENTS),
@@ -67,7 +68,8 @@ def _build(k: dict) -> KP:
             if alt and alt.get("title") else None,
         ))
     return KP(
-        kind={"vis": "visual"}.get(k["kind"], "standard"), customer=k["customer"], manager=k["manager"], phone=k["phone"],
+        kind={"vis": "visual"}.get(k["kind"], "standard"), customer=k["customer"], client_phone=k.get("customer_phone", ""),
+        manager=k["manager"], phone=k["phone"],
         telegram=k.get("telegram", ""), showroom=profiles.footer_text(k.get("showroom", "")),
         date=now.date(), valid_days=k["valid_days"], number=f"{now:%d%m}-{now:%H%M}", items=items,
         production=k["production"], services=k["services"],
@@ -87,7 +89,8 @@ def _json_safe(k: dict) -> dict:
         return base
 
     return {
-        "kind": k["kind"], "customer": k["customer"], "production": k["production"], "services": k["services"],
+        "kind": k["kind"], "customer": k["customer"], "customer_phone": k.get("customer_phone", ""),
+        "production": k["production"], "services": k["services"],
         "valid_days": k["valid_days"], "payments": k["payments"], "items": [item_safe(it) for it in k["items"]],
     }
 
@@ -95,7 +98,7 @@ def _json_safe(k: dict) -> dict:
 def _from_history(uid: int, st: dict) -> dict:
     """Восстанавливает редактируемое состояние КП из слепка истории (без фото — их нужно прикрепить заново)."""
     k = _kp_new(profiles.get(uid))
-    for f in ("kind", "customer", "production", "services", "valid_days", "payments"):
+    for f in ("kind", "customer", "customer_phone", "production", "services", "valid_days", "payments"):
         if f in st:
             k[f] = st[f]
     items = []
@@ -150,7 +153,9 @@ def _prompt(step: str, k: dict, c: dict) -> tuple[str, list[tuple[str, str]], st
                 [("📋 Стандарт — позиции с ценой и скидкой", "std"),
                  ("🎨 С визуализацией — индивидуальная позиция + альтернатива из коллекции", "vis")], None)
     if step == "customer":
-        return "👤 Заказчик (имя или организация):", [], skip
+        return "👤 <b>Заказчик</b> — ФИО или название организации:", [], None
+    if step == "customer_phone":
+        return "📞 <b>Телефон заказчика</b> (клиента):", [], None
     if step == "manager":
         return "🧑‍💼 Ответственный менеджер (ФИО):", [], skip
     if step == "phone":
@@ -289,10 +294,26 @@ async def _apply(target: types.Message, state: FSMContext, uid: int, value: str 
         if value == "last":
             name, phone = LAST_MANAGER.get(uid, ("", ""))
             value = name if step == "manager" else phone
-        if empty and data["mode"] == "edit":
-            pass  # пропустили при правке уже заполненного поля — оставляем как было
+        if empty:
+            if data["mode"] == "edit":
+                pass  # пропустили при правке уже заполненного поля — оставляем как было
+            elif step == "customer":
+                return "Укажите ФИО или название заказчика — это обязательное поле."
+            else:
+                k[step] = ""
         else:
             k[step] = value or ""
+    elif step == "customer_phone":
+        if empty:
+            if data["mode"] == "edit":
+                pass
+            else:
+                return "Укажите телефон заказчика — это обязательное поле."
+        else:
+            phone_val = onboarding.norm_phone(value)
+            if not phone_val:
+                return "Похоже, это не номер телефона. Формат: +7 999 123-45-67 (10 или 11 цифр)."
+            k["customer_phone"] = phone_val
     elif step == "alt_query" and empty:
         c["alt"] = None
         queue[:] = [q for q in queue if not q.startswith("alt_")]
@@ -386,7 +407,7 @@ async def cb_skip(call: types.CallbackQuery, state: FSMContext) -> None:
         await call.answer()
         return
     step = data["queue"][0]
-    if step in ("kind", "query", "pick", "qty", "price", "discount"):
+    if step in ("kind", "customer", "customer_phone", "query", "pick", "qty", "price", "discount"):
         await call.answer("Этот вопрос нужно заполнить", show_alert=True)
         return
     await call.answer("Пропущено")
@@ -607,14 +628,17 @@ def _summary(k: dict) -> str:
     kp = _build(k)
     lines = [
         "📋 <b>КП готово к выпуску</b>",
-        f"Заказчик: {kp.customer or '—'}",
+        f"Заказчик: {kp.customer or '—'}{', ' + kp.client_phone if kp.client_phone else ''}",
         f"Менеджер: {kp.manager or '—'}{', ' + kp.phone if kp.phone else ''}",
         f"Действует до: {date_ru(kp.valid_until)}",
         "",
     ]
     for n, it in enumerate(kp.items, 1):
         disc = f", −{it.discount:g}%" if it.discount else ""
-        lines.append(f"{n}. {it.title} — {it.qty} × {rub(it.unit_price)}{disc} = <b>{rub(it.total())}</b>")
+        lines.append(
+            f"{n}. {it.title} — {it.qty} × <s>{rub(it.list_unit_price)}</s> {rub(it.unit_price)}{disc}"
+            f" = <b>{rub(it.total())}</b>"
+        )
         if it.alt:
             lines.append(f"    альтернатива: {it.alt.title} — {rub(it.alt.total(it.qty))}")
     lines.append("")
@@ -677,7 +701,7 @@ async def cb_dellast(call: types.CallbackQuery, state: FSMContext) -> None:
 
 @router.callback_query(F.data == "kp:editcust", KPForm.run)
 async def cb_editcust(call: types.CallbackQuery, state: FSMContext) -> None:
-    await state.update_data(mode="edit", queue=["customer", "manager", "phone"])
+    await state.update_data(mode="edit", queue=["customer", "customer_phone", "manager", "phone"])
     await call.answer()
     await _next(call.message, state, call.from_user.id)
 
@@ -710,7 +734,7 @@ async def cb_make(call: types.CallbackQuery, state: FSMContext) -> None:
             f"📋 КП №{kp.number}\n"
             f"👤 Менеджер: {kp.manager or '—'}" + (f" · {contacts}" if contacts else "") + "\n"
             f"🏬 Шоу-рум: {profiles.norm_showroom(k.get('showroom', '')) or '—'}\n"
-            f"Заказчик: {kp.customer or '—'}\n"
+            f"Заказчик: {kp.customer or '—'}" + (f" · {kp.client_phone}" if kp.client_phone else "") + "\n"
             f"Позиций: {len(kp.items)} · Итого: {rub(kp.total())}"
         ),
     )

@@ -1,4 +1,4 @@
-"""Мои сделки (план продаж): добавление и редактирование, полный список — владельцу автоматически."""
+"""Планируемые продажи (кнопка меню; раньше «Мои сделки»): добавление и редактирование, полный список — владельцу автоматически."""
 
 from __future__ import annotations
 
@@ -128,8 +128,8 @@ def _deal_line(i: int, d: dict) -> str:
 def _list_text(uid: int) -> str:
     items = pl.deals(uid)
     if not items:
-        return "📈 <b>Мои сделки</b>\n\nПока нет ни одной сделки. Добавьте первую кнопкой ниже."
-    lines = ["📈 <b>Мои сделки</b>", ""] + [_deal_line(i, d) for i, d in enumerate(items, 1)]
+        return "📈 <b>Планируемые продажи</b>\n\nПока нет ни одной сделки. Добавьте первую кнопкой ниже."
+    lines = ["📈 <b>Планируемые продажи</b>", ""] + [_deal_line(i, d) for i, d in enumerate(items, 1)]
     lines.append(f"\nИтого потенциально: <b>{rub(pl.total(items))}</b> по {len(items)} сделкам")
     return "\n".join(lines)
 
@@ -140,8 +140,6 @@ def _list_markup(uid: int) -> types.InlineKeyboardMarkup:
     for i, d in enumerate(items, 1):
         b.row(InlineKeyboardButton(text=f"✏ {i}. {d['client'][:30]}", callback_data=f"pipe:open:{d['id']}"))
     b.row(InlineKeyboardButton(text="➕ Добавить сделку", callback_data="pipe:add"))
-    if items:
-        b.row(InlineKeyboardButton(text="📤 Отправить отчёт владельцу", callback_data="pipe:send"))
     b.row(InlineKeyboardButton(text="🏠 В главное меню", callback_data="menu:home"))
     return b.as_markup()
 
@@ -220,15 +218,6 @@ async def cb_cancel(call: types.CallbackQuery, state: FSMContext) -> None:
     await state.clear()
     await call.answer("Отменено")
     await call.message.answer(_list_text(call.from_user.id), reply_markup=_list_markup(call.from_user.id))
-
-
-@router.callback_query(F.data == "pipe:send")
-async def cb_send(call: types.CallbackQuery, state: FSMContext) -> None:
-    if not analytics.enabled():
-        await call.answer("Владелец ещё не подключил приём отчётов", show_alert=True)
-        return
-    _notify_owner(call.from_user.id)
-    await call.answer("Отправлено владельцу")
 
 
 # --- добавление новой сделки --------------------------------------------------------------

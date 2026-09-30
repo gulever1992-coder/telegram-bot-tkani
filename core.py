@@ -27,9 +27,10 @@ from tag_flow import router as tag_router
 from kp_flow import router as kp_router
 from onboarding import ProfileGate, router as onb_router
 from pipeline_flow import router as pipeline_router
+from delivery_flow import router as delivery_router
 from quickmenu import router as quick_router
 from utils import images as legacy_images
-from utils import nano, sheets
+from utils import fabrics, nano, sheets
 from utils.agency import AgencyData, build_agency_package
 
 WELCOME_TEXT = "👋 Привет! Я рабочий бот-помощник.\n\nВыберите действие в меню внизу 👇"
@@ -44,6 +45,7 @@ dp.include_router(refund_router)
 dp.include_router(tag_router)
 dp.include_router(kp_router)
 dp.include_router(pipeline_router)
+dp.include_router(delivery_router)
 
 MSK = dt.timezone(dt.timedelta(hours=3))
 
@@ -550,66 +552,97 @@ async def pay_date(message: types.Message, state: FSMContext) -> None:
     await _finish(message, state, date)
 
 
-# --- Поиск ткани: цена и остаток --------------------------------------------
+# --- Поиск ткани: фабрика -> ткань -> цена, категория, цвета в наличии ------
 
 
 class SearchForm(StatesGroup):
+    supplier = State()
     query = State()
 
 
 SEARCH_HINT = (
     "🔎 <b>Поиск ткани</b>\n"
-    "Введите название ткани (можно часть названия), например: <i>кашемир</i>.\n"
-    "Я скажу цену за погонный метр и остаток у производителя."
+    "Шаг 1 из 2. Выберите <b>фабрику</b>:"
 )
+
+
+async def _load_fabrics():
+    return await fabrics.load(config.PRICE_CSV_URL, config.STOCK_CSV_URL)
 
 
 @router.callback_query(F.data == "menu:search")
 async def cb_search(call: types.CallbackQuery, state: FSMContext) -> None:
     await state.clear()
-    await state.set_state(SearchForm.query)
-    await show(call.message, SEARCH_HINT, reply_markup=kb.search_keyboard())
+    try:
+        price, _ = await _load_fabrics()
+    except sheets.SheetError as exc:
+        await show(call.message, f"❌ {exc}", reply_markup=kb.search_keyboard())
+        await call.answer()
+        return
+    suppliers = fabrics.suppliers(price)
+    await state.set_state(SearchForm.supplier)
+    await state.update_data(suppliers=suppliers)
+    await show(call.message, SEARCH_HINT, reply_markup=kb.suppliers_keyboard(suppliers))
     await call.answer()
+
+
+@router.callback_query(F.data.startswith("fab:"))
+async def cb_pick_supplier(call: types.CallbackQuery, state: FSMContext) -> None:
+    data = await state.get_data()
+    suppliers = data.get("suppliers") or []
+    try:
+        supplier = suppliers[int(call.data.split(":", 1)[1])]
+    except (ValueError, IndexError):
+        await call.answer("Список фабрик устарел — откройте поиск заново.", show_alert=True)
+        return
+    await state.set_state(SearchForm.query)
+    await state.update_data(supplier=supplier)
+    await show(
+        call.message,
+        f"🏭 Фабрика: <b>{fabrics.esc(supplier)}</b>\n\n"
+        "Шаг 2 из 2. Напишите <b>название ткани</b> (можно часть названия), например: <i>velutto</i>.\n"
+        "Покажу цену за отрез, категорию и какие цвета есть в наличии.",
+        reply_markup=kb.search_keyboard(),
+    )
+    await call.answer()
+
+
+@router.message(SearchForm.supplier, F.text)
+async def search_need_supplier(message: types.Message, state: FSMContext) -> None:
+    data = await state.get_data()
+    await message.answer("Сначала выберите фабрику кнопкой 👇",
+                         reply_markup=kb.suppliers_keyboard(data.get("suppliers") or []))
 
 
 @router.message(SearchForm.query, F.text)
 async def search_fabric(message: types.Message, state: FSMContext) -> None:
     query = message.text.strip()
-    analytics.track(message.chat.id, "search", query[:40])
+    supplier = (await state.get_data()).get("supplier", "")
+    analytics.track(message.chat.id, "search", f"{supplier}: {query}"[:60])
     try:
-        prices, stocks = await asyncio.gather(
-            sheets.fetch_pairs(config.PRICE_CSV_URL), sheets.fetch_pairs(config.STOCK_CSV_URL)
-        )
+        price, stock = await _load_fabrics()
     except sheets.SheetError as exc:
         await message.answer(f"❌ {exc}", reply_markup=kb.search_keyboard())
         return
 
-    names: list[str] = []
-    for name, _ in prices + stocks:
-        if sheets.name_matches(query, name) and name not in names:
-            names.append(name)
-
-    if not names:
-        await message.answer(
-            f"Ткань «{query}» не нашёл. Проверьте название или откройте прайс онлайн.\n"
-            "Можно ввести другое название.",
-            reply_markup=kb.search_keyboard(),
-        )
+    has_stock = any(s.supplier == supplier for s in stock)
+    found = fabrics.find_fabrics(price, supplier, query)
+    if not found:
+        probe = fabrics.stock_only(stock, supplier, query)
+        if probe:
+            found = [probe]
+    if not found:
+        hint = fabrics.similar(price, supplier, query)
+        text = f"Ткань «{fabrics.esc(query)}» у фабрики {fabrics.esc(supplier)} не нашёл."
+        if hint:
+            text += "\nПохожие: " + ", ".join(f"<b>{fabrics.esc(h)}</b>" for h in hint)
+        text += "\n\nНапишите другое название или выберите другую фабрику."
+        await message.answer(text, reply_markup=kb.search_keyboard())
         return
 
-    price_by = {sheets.normalize(n): v for n, v in prices}
-    stock_by = {sheets.normalize(n): v for n, v in stocks}
-    blocks = []
-    for name in names[:10]:
-        key = sheets.normalize(name)
-        price = price_by.get(key)
-        stock = stock_by.get(key)
-        blocks.append(
-            f"🧵 <b>{name}</b>\n"
-            f"💰 Цена: {price + ' ₽ за погонный метр' if price else 'нет в прайсе'}\n"
-            f"📦 Остаток у производителя: {stock + ' м' if stock else 'нет данных'}"
-        )
-    text = "\n\n".join(blocks)
-    if len(names) > 10:
-        text += f"\n\nНайдено {len(names)}, показаны первые 10. Уточните название."
-    await message.answer(text + "\n\nМожно ввести следующую ткань.", reply_markup=kb.search_keyboard())
+    for fabric in found[:5]:
+        rows = fabrics.stock_for(fabric, stock, price)
+        await message.answer(fabrics.format_fabric(fabric, rows, has_stock))
+    tail = f"Найдено {len(found)}, показаны первые 5 — уточните название.\n" if len(found) > 5 else ""
+    await message.answer(tail + f"Можно написать следующую ткань фабрики <b>{fabrics.esc(supplier)}</b>.",
+                         reply_markup=kb.search_keyboard())

@@ -48,6 +48,20 @@ THANKS = (
 )
 
 
+# Менеджер вводит уже готовую цену за штуку (с учётом любой скидки, которую он даёт устно).
+# «Цену без скидки» (зачёркнутую) для КП считаем сами: поднимаем введённую цену на этот процент —
+# чтобы клиент в любом КП видел, что покупает со скидкой, даже если менеджер скидку явно не считал.
+AUTO_MARKUP_PCT = 12
+_ROUND_STEP = 100
+
+
+def _round_up_x100(value_x100: int, step: int = _ROUND_STEP) -> int:
+    """value_x100 = цена × 100, целым числом (без плавающей точки — не даёт 56100 вместо 56000).
+    Округляет вверх до кратного step."""
+    denom = 100 * step
+    return -(-value_x100 // denom) * step
+
+
 @dataclass
 class KPItem:
     title: str = ""
@@ -56,7 +70,7 @@ class KPItem:
     material: str = ""
     link: str = ""
     unit_price: int = 0
-    discount: float = 0.0  # проценты
+    discount: float = 0.0  # проценты — доп. скидка сверх введённой цены
     photo: bytes | None = None
     alt: "KPItem | None" = None  # альтернатива из коллекции (вариант visual)
 
@@ -68,11 +82,21 @@ class KPItem:
     def gross(self) -> int:
         return int(round(self.unit_price * self.qty))
 
+    @property
+    def list_unit_price(self) -> int:
+        """Автоматическая «цена без скидки» за штуку — не зависит от доп. скидки менеджера."""
+        return _round_up_x100(self.unit_price * (100 + AUTO_MARKUP_PCT))
+
+    @property
+    def list_total(self) -> int:
+        return self.list_unit_price * self.qty
+
 
 @dataclass
 class KP:
     kind: str = "standard"  # standard | visual
     customer: str = ""
+    client_phone: str = ""
     manager: str = ""
     phone: str = ""
     telegram: str = ""
@@ -174,6 +198,16 @@ class _Renderer:
     def label(self, x, y, s, align="l"):
         self.text(x, y, s.upper(), size=6.8, color=GREY, space=1.1, align=align)
 
+    def strike_text(self, x, y, s, size=9.5, color=GREY, align="r"):
+        """Зачёркнутая цена «без скидки» — reportlab не умеет strike-through сам, рисуем линию поверх."""
+        self.text(x, y, s, size=size, color=color, align=align)
+        w = self.c.stringWidth(s, self.REG, size)
+        x0, x1 = (x - w, x) if align == "r" else (x, x + w)
+        self.c.setStrokeColorRGB(*color)
+        self.c.setLineWidth(0.7)
+        ly = self.Y(y - size * 0.32)
+        self.c.line(x0, ly, x1, ly)
+
     def wrap(self, s: str, size: float, width: float, bold=False) -> list[str]:
         font = self.BOLD if bold else self.REG
         lines: list[str] = []
@@ -241,7 +275,8 @@ class _Renderer:
         y += 14
         self.hair(y, color=INK, width=0.8)
         y += 18
-        cols = [(ML, "Заказчик", kp.customer or "—", 205), (260, "Дата", date_ru(kp.date), 90),
+        customer_val = f"{kp.customer or '—'}\n{kp.client_phone}" if kp.client_phone else (kp.customer or "—")
+        cols = [(ML, "Заказчик", customer_val, 205), (260, "Дата", date_ru(kp.date), 90),
                 (365, "Действует до", date_ru(kp.valid_until), 90), (470, "Менеджер", kp.manager or "—", 85)]
         tallest = 0
         for x, lab, val, wd in cols:
@@ -289,12 +324,15 @@ class _Renderer:
         # правая колонка
         rx0, rx1 = 418.0, MR
         ry = y0 + 22
-        for lab, val in (("Цена за ед.", rub(it.unit_price)), ("Количество", f"{it.qty} шт")):
+        self.label(rx0, ry, "Цена без скидки")
+        self.strike_text(rx1, ry, rub(it.list_unit_price), size=9.5)
+        ry += 16
+        for lab, val in (("Цена со скидкой", rub(it.unit_price)), ("Количество", f"{it.qty} шт")):
             self.label(rx0, ry, lab)
             self.text(rx1, ry, val, size=9.5, align="r")
             ry += 16
         if it.discount:
-            self.label(rx0, ry, "Скидка")
+            self.label(rx0, ry, "Доп. скидка")
             self.text(rx1, ry, f"{_pct(it.discount)}%", size=9.5, align="r")
             ry += 16
         self.hair(y0 + h - 40, rx0, rx1, color=INK, width=0.6)
@@ -308,7 +346,7 @@ class _Renderer:
         colw, gap = 250.0, 15.0
         cols = [("Индивидуальное изготовление", it, ML), ("Наша альтернатива · из коллекции", it.alt, ML + colw + gap)]
 
-        def block_h(p: KPItem | None) -> float:
+        def block_h(p: KPItem | None, extra: float = 0) -> float:
             if not p:
                 return 40
             t = len(self.wrap(p.title, 13, colw)) * 16
@@ -317,9 +355,9 @@ class _Renderer:
                 s += len(self.wrap(v, 9.5, colw - 70)) * 12 + 4 if v else 0
             if p.link:
                 s += 16
-            return 20 + 150 + 12 + t + 6 + s + 58
+            return 20 + 150 + 12 + t + 6 + s + 58 + extra
 
-        h = max(block_h(it), block_h(it.alt)) + 10
+        h = max(block_h(it, extra=14), block_h(it.alt)) + 10
         self.need(h)
         y0 = self.y
         for idx, (lab, p, x) in enumerate(cols):
@@ -346,11 +384,17 @@ class _Renderer:
                 self.text(x + 70, y, _short(p.link), size=9.5)
                 self.c.linkURL(p.link, (x + 70, self.Y(y + 3), x + colw, self.Y(y - 9)), relative=0)
                 y += 16
-            yy = y0 + h - 48
+            extra = 14 if idx == 0 else 0
+            yy = y0 + h - 48 - extra
             self.hair(yy, x, x + colw, color=INK, width=0.6)
             qty = it.qty
-            self.label(x, yy + 16, f"{rub(p.unit_price)} × {qty} шт" + (f" · −{_pct(p.discount)}%" if p.discount else ""))
-            self.text(x + colw, yy + 32, rub(p.total(qty)), size=15, bold=True, align="r")
+            cy = yy + 16
+            if idx == 0:
+                self.label(x, cy, "Цена без скидки")
+                self.strike_text(x + colw, cy, rub(it.list_unit_price), size=9)
+                cy += 14
+            self.label(x, cy, f"{rub(p.unit_price)} × {qty} шт" + (f" · −{_pct(p.discount)}%" if p.discount else ""))
+            self.text(x + colw, cy + 16, rub(p.total(qty)), size=15, bold=True, align="r")
         self.y = y0 + h
         self.hair(self.y)
         self.y += 10

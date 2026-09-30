@@ -8,7 +8,8 @@ MENU_ITEMS = [
     ("🎨 Создать картинку", "image"), ("💵 Выплата дизайнеру", "payment"),
     ("📝 Заявление на возврат", "refund"), ("🏷 Ценник на мебель", "tag"),
     ("📋 Коммерческое предложение", "kp"), ("📄 Мои КП", "mykp"),
-    ("📈 Мои сделки", "pipeline"), ("👤 Мой профиль", "profile"),
+    ("📈 Планируемые продажи", "pipeline"), ("🚚 Стоимость доставки", "delivery"),
+    ("👤 Мой профиль", "profile"),
 ]
 MENU_TEXT = dict(MENU_ITEMS)
 
@@ -29,7 +30,7 @@ def reply_menu() -> ReplyKeyboardMarkup:
 
 def main_menu() -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
-    builder.row(InlineKeyboardButton(text="🔎 Найти ткань (цена и остаток)", callback_data="menu:search"))
+    builder.row(InlineKeyboardButton(text="🔎 Найти ткань (цена, категория, цвета)", callback_data="menu:search"))
     builder.row(InlineKeyboardButton(text="📄 Открыть прайс онлайн", url=config.PRICE_ONLINE_URL))
     builder.row(InlineKeyboardButton(text="🎨 Создать картинку", callback_data="menu:image"))
     builder.row(InlineKeyboardButton(text="💵 Выплата дизайнеру", callback_data="menu:payment"))
@@ -37,13 +38,24 @@ def main_menu() -> InlineKeyboardMarkup:
     builder.row(InlineKeyboardButton(text="🏷 Ценник на мебель", callback_data="menu:tag"))
     builder.row(InlineKeyboardButton(text="📋 Коммерческое предложение", callback_data="menu:kp"))
     builder.row(InlineKeyboardButton(text="📄 Мои КП", callback_data="menu:mykp"))
-    builder.row(InlineKeyboardButton(text="📈 Мои сделки", callback_data="menu:pipeline"))
+    builder.row(InlineKeyboardButton(text="📈 Планируемые продажи", callback_data="menu:pipeline"))
+    builder.row(InlineKeyboardButton(text="🚚 Стоимость доставки", callback_data="menu:delivery"))
     builder.row(InlineKeyboardButton(text="👤 Мой профиль", callback_data="menu:profile"))
+    return builder.as_markup()
+
+
+def suppliers_keyboard(suppliers: list[str]) -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    for i, name in enumerate(suppliers):
+        builder.button(text=name, callback_data=f"fab:{i}")
+    builder.adjust(2)
+    builder.row(InlineKeyboardButton(text="🏠 В главное меню", callback_data="menu:home"))
     return builder.as_markup()
 
 
 def search_keyboard() -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
+    builder.row(InlineKeyboardButton(text="🏭 Другая фабрика", callback_data="menu:search"))
     builder.row(InlineKeyboardButton(text="📄 Открыть прайс онлайн", url=config.PRICE_ONLINE_URL))
     builder.row(InlineKeyboardButton(text="🏠 В главное меню", callback_data="menu:home"))
     return builder.as_markup()
