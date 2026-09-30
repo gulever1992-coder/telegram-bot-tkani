@@ -29,7 +29,7 @@ def reply_menu() -> ReplyKeyboardMarkup:
 
 def main_menu() -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
-    builder.row(InlineKeyboardButton(text="🔎 Найти ткань (цена и остаток)", callback_data="menu:search"))
+    builder.row(InlineKeyboardButton(text="🔎 Найти ткань (цена, категория, цвета)", callback_data="menu:search"))
     builder.row(InlineKeyboardButton(text="📄 Открыть прайс онлайн", url=config.PRICE_ONLINE_URL))
     builder.row(InlineKeyboardButton(text="🎨 Создать картинку", callback_data="menu:image"))
     builder.row(InlineKeyboardButton(text="💵 Выплата дизайнеру", callback_data="menu:payment"))
@@ -42,8 +42,18 @@ def main_menu() -> InlineKeyboardMarkup:
     return builder.as_markup()
 
 
+def suppliers_keyboard(suppliers: list[str]) -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    for i, name in enumerate(suppliers):
+        builder.button(text=name, callback_data=f"fab:{i}")
+    builder.adjust(2)
+    builder.row(InlineKeyboardButton(text="🏠 В главное меню", callback_data="menu:home"))
+    return builder.as_markup()
+
+
 def search_keyboard() -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
+    builder.row(InlineKeyboardButton(text="🏭 Другая фабрика", callback_data="menu:search"))
     builder.row(InlineKeyboardButton(text="📄 Открыть прайс онлайн", url=config.PRICE_ONLINE_URL))
     builder.row(InlineKeyboardButton(text="🏠 В главное меню", callback_data="menu:home"))
     return builder.as_markup()
