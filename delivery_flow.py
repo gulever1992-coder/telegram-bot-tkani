@@ -13,6 +13,7 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 import analytics
 import delivery as dl
+from utils import regions
 from utils.kp import rub
 
 router = Router()
@@ -185,6 +186,63 @@ async def _finish_quote(target: types.Message, state: FSMContext) -> None:
     await target.answer(text, reply_markup=b.as_markup())
 
 
+# --- доставка в регион: город из таблицы + позиции текстом -------------------------------
+
+
+def _region_block(entry: dict) -> str:
+    lines = [f"🌍 <b>{entry['city']}</b>", f"Откуда выгоднее отгружать: {entry['from'] or '—'}"]
+    if entry["tk"]:
+        lines.append(f"\n<b>Транспортная компания:</b>\n{entry['tk']}")
+    if entry["ati"]:
+        lines.append(f"\n<b>АТИ (частный перевозчик):</b>\n{entry['ati']}")
+    return "\n".join(lines)
+
+
+def _region_result(entry: dict, items: list[tuple[str, int]]) -> str:
+    lines = [_region_block(entry), "", "📦 <b>Позиции:</b>"]
+    for name, qty in items:
+        key = regions.item_key(name)
+        rng = regions.price_range(entry, key) if key else None
+        if rng:
+            lo, hi = rng
+            note = "" if qty == 1 else f" — цена за {qty} шт уточняется у ТК"
+            lines.append(f"— {name} × {qty}: от {rub(lo)} до {rub(hi)} за 1 шт{note}")
+        else:
+            lines.append(f"— {name} × {qty}: тарифа на эту позицию в таблице нет, уточните у ТК/логистики")
+    lines.append(
+        "\n<i>Диапазон — по прайсу ТК для стандартных габаритов (диван 2300×1060×850, кресло 870×930×1060). "
+        "Если позиция крупнее или позиций несколько — точную стоимость подтверждает транспортная компания.</i>"
+    )
+    return "\n".join(lines)
+
+
+def _region_result_markup() -> types.InlineKeyboardMarkup:
+    b = InlineKeyboardBuilder()
+    b.row(InlineKeyboardButton(text="📄 Открыть таблицу тарифов", url=REGIONS_URL))
+    b.row(InlineKeyboardButton(text="🔁 Новый расчёт", callback_data="menu:delivery"))
+    b.row(InlineKeyboardButton(text="🏠 В главное меню", callback_data="menu:home"))
+    return b.as_markup()
+
+
+async def _region_ask_items(target: types.Message, state: FSMContext, entry: dict) -> None:
+    await state.update_data(phase="region_items", region_entry=entry)
+    await target.answer(
+        _region_block(entry) + "\n\n📦 Какие позиции и в каком количестве? Например:\nДиван 1 шт\nКресло 2 шт"
+    )
+
+
+@router.callback_query(F.data.startswith("deliv:rcity:"), DeliveryForm.run)
+async def cb_region_city_pick(call: types.CallbackQuery, state: FSMContext) -> None:
+    data = await state.get_data()
+    matches = data.get("region_matches") or []
+    idx = int(call.data.split(":")[2])
+    if data.get("phase") != "region_pick" or idx >= len(matches):
+        await call.answer("Список устарел, напишите город ещё раз", show_alert=True)
+        return
+    await call.answer()
+    await _region_ask_items(call.message, state, matches[idx])
+
+
 # --- вход ----------------------------------------------------------------------------
 
 
@@ -210,14 +268,11 @@ async def cb_city(call: types.CallbackQuery, state: FSMContext) -> None:
     city = call.data.split(":")[2]
     await call.answer()
     if city == "region":
-        b = InlineKeyboardBuilder()
-        b.row(InlineKeyboardButton(text="📄 Открыть таблицу тарифов по городам", url=REGIONS_URL))
-        b.row(InlineKeyboardButton(text="🏠 В главное меню", callback_data="menu:home"))
+        await state.set_state(DeliveryForm.run)
+        await state.update_data(phase="region_city")
         await call.message.answer(
-            "🌍 <b>Доставка в регион</b>\nСвоей доставкой не возим — тариф и лучшая транспортная компания "
-            "смотрятся по городу доставки в таблице.\nОбратите внимание: расчёт в таблице — для стандартных "
-            "габаритов (диван 2300×1060×850, кресло 870×930×1060); если позиция крупнее — цена в ТК будет выше.",
-            reply_markup=b.as_markup(),
+            "🌍 <b>Доставка в регион</b>\nСвоей доставкой не возим — везёт транспортная компания или частный "
+            "перевозчик, по городу доставки смотрим готовые тарифы.\n\nВ какой город доставка? Напишите название:"
         )
         return
     city_label = "Москве" if city == "msk" else "Санкт-Петербургу"
@@ -319,6 +374,51 @@ async def cb_skip(call: types.CallbackQuery, state: FSMContext) -> None:
 @router.message(DeliveryForm.run, F.text)
 async def msg_value(message: types.Message, state: FSMContext) -> None:
     data = await state.get_data()
+    phase = data.get("phase")
+
+    if phase == "region_city":
+        status = await message.answer("🔎 Ищу город в таблице...")
+        try:
+            matches = await regions.find(message.text)
+        except regions.RegionError as exc:
+            b = InlineKeyboardBuilder()
+            b.row(InlineKeyboardButton(text="📄 Открыть таблицу тарифов", url=REGIONS_URL))
+            b.row(InlineKeyboardButton(text="🏠 В главное меню", callback_data="menu:home"))
+            await status.edit_text(f"⚠ {exc}", reply_markup=b.as_markup())
+            return
+        if not matches:
+            b = InlineKeyboardBuilder()
+            b.row(InlineKeyboardButton(text="📄 Открыть таблицу тарифов", url=REGIONS_URL))
+            b.row(InlineKeyboardButton(text="🏠 В главное меню", callback_data="menu:home"))
+            await status.edit_text(
+                f"«{message.text.strip()}» не нашёл в таблице. Попробуйте другое написание или откройте таблицу сами.",
+                reply_markup=b.as_markup(),
+            )
+            return
+        if len(matches) == 1:
+            await status.delete()
+            await _region_ask_items(message, state, matches[0])
+            return
+        await state.update_data(phase="region_pick", region_matches=matches)
+        b = InlineKeyboardBuilder()
+        for i, m in enumerate(matches[:15]):
+            b.row(InlineKeyboardButton(text=m["city"], callback_data=f"deliv:rcity:{i}"))
+        b.row(InlineKeyboardButton(text="🏠 В главное меню", callback_data="menu:home"))
+        await status.edit_text("Нашёл несколько городов, уточните:", reply_markup=b.as_markup())
+        return
+
+    if phase == "region_items":
+        entry = data["region_entry"]
+        items = regions.parse_items(message.text)
+        if not items:
+            await message.answer("Не разобрал позиции. Например:\nДиван 1 шт\nКресло 2 шт")
+            return
+        text = _region_result(entry, items)
+        analytics.track(message.chat.id, "delivery", entry["city"], data={"region": entry["city"], "items": len(items)})
+        await state.clear()
+        await message.answer(text, reply_markup=_region_result_markup())
+        return
+
     queue = data.get("queue") or []
     if not queue:
         return

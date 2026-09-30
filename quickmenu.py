@@ -7,10 +7,7 @@ from __future__ import annotations
 
 from aiogram import F, Router, types
 from aiogram.fsm.context import FSMContext
-from aiogram.types import InlineKeyboardButton
-from aiogram.utils.keyboard import InlineKeyboardBuilder
 
-import config
 import keyboards as kb
 
 router = Router()
@@ -51,12 +48,6 @@ async def on_menu_button(message: types.Message, state: FSMContext) -> None:
     await state.clear()
     key = kb.MENU_TEXT[message.text.strip()]
     call = _Call(message)
-
-    if key == "price":
-        b = InlineKeyboardBuilder()
-        b.row(InlineKeyboardButton(text="📄 Открыть прайс онлайн", url=config.PRICE_ONLINE_URL))
-        await message.answer("Прайс на ткани — по кнопке ниже:", reply_markup=b.as_markup())
-        return
 
     # импорт внутри функции — чтобы не было циклов между модулями
     import core

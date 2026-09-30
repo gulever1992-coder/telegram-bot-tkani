@@ -4,7 +4,7 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 
 MENU_ITEMS = [
-    ("🔎 Найти ткань", "search"), ("📄 Прайс онлайн", "price"),
+    ("🔎 Найти ткань", "search"),
     ("🎨 Создать картинку", "image"), ("💵 Выплата дизайнеру", "payment"),
     ("📝 Заявление на возврат", "refund"), ("🏷 Ценник на мебель", "tag"),
     ("📋 Коммерческое предложение", "kp"), ("📄 Мои КП", "mykp"),
@@ -31,7 +31,6 @@ def reply_menu() -> ReplyKeyboardMarkup:
 def main_menu() -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     builder.row(InlineKeyboardButton(text="🔎 Найти ткань (цена, категория, цвета)", callback_data="menu:search"))
-    builder.row(InlineKeyboardButton(text="📄 Открыть прайс онлайн", url=config.PRICE_ONLINE_URL))
     builder.row(InlineKeyboardButton(text="🎨 Создать картинку", callback_data="menu:image"))
     builder.row(InlineKeyboardButton(text="💵 Выплата дизайнеру", callback_data="menu:payment"))
     builder.row(InlineKeyboardButton(text="📝 Заявление на возврат", callback_data="menu:refund"))
