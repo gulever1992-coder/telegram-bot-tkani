@@ -25,7 +25,7 @@ FIELD_TITLES = {
     "client": "Клиент / сделка", "amount": "Потенциальная сумма", "arrived": "Когда пришёл",
     "stage": "Текущая стадия", "status": "Статус", "planned_date": "Дата продажи", "blocker": "Что мешает",
 }
-REQUIRED = {"client", "status"}
+REQUIRED = {"client", "status", "arrived", "planned_date"}
 
 
 class PipeForm(StatesGroup):
@@ -40,9 +40,24 @@ def _fmt(d: dt.date) -> str:
     return d.strftime("%d.%m.%Y")
 
 
+_DATE_RE = re.compile(r"^(\d{1,2})[.\-/](\d{1,2})(?:[.\-/](\d{2,4}))?$")
+
+
 def _parse_date(text: str) -> str | None:
+    """Гибкий разбор даты: 05.10.2026, 05.10.26, 05.10 (год — текущий), 5/10, 5-10-26 и т.п."""
+    m = _DATE_RE.match(text.strip())
+    if not m:
+        return None
+    day, month, year = m.groups()
+    day, month = int(day), int(month)
+    if year is None:
+        year = _today().year
+    else:
+        year = int(year)
+        if year < 100:
+            year += 2000
     try:
-        return _fmt(dt.datetime.strptime(text.strip(), "%d.%m.%Y").date())
+        return _fmt(dt.date(year, month, day))
     except ValueError:
         return None
 
@@ -61,17 +76,19 @@ def _prompt(field: str) -> tuple[str, list[tuple[str, str]]]:
     if field == "amount":
         return "2️⃣ <b>Потенциальная сумма</b>, руб.:", []
     if field == "arrived":
-        return "3️⃣ <b>Когда пришёл клиент?</b>", [
-            ("Сегодня", "ago:0"), ("Вчера", "ago:1"), ("3 дня назад", "ago:3"), ("Неделю назад", "ago:7"),
-        ]
+        return (
+            "3️⃣ <b>Когда пришёл клиент?</b> Выберите кнопкой или напишите дату (например: 5.10 или 05.10.2026):",
+            [("Сегодня", "ago:0"), ("Вчера", "ago:1"), ("3 дня назад", "ago:3"), ("Неделю назад", "ago:7")],
+        )
     if field == "stage":
         return "4️⃣ <b>Текущая стадия</b>:", [(s, f"stage:{i}") for i, s in enumerate(pl.STAGES)]
     if field == "status":
         return "5️⃣ <b>Статус</b>:", [(label, f"status:{key}") for key, label in pl.STATUSES]
     if field == "planned_date":
-        return "6️⃣ <b>Планируемая дата продажи</b>:", [
-            ("Сегодня", "in:0"), ("Через 3 дня", "in:3"), ("Через неделю", "in:7"), ("Через 2 недели", "in:14"),
-        ]
+        return (
+            "6️⃣ <b>Планируемая дата продажи</b>. Выберите кнопкой или напишите дату (например: 20.10 или 20.10.2026):",
+            [("Сегодня", "in:0"), ("Через 3 дня", "in:3"), ("Через неделю", "in:7"), ("Через 2 недели", "in:14")],
+        )
     return "7️⃣ <b>Что мешает / следующий шаг</b>:", []
 
 
@@ -94,7 +111,7 @@ def _parse(field: str, value: str) -> tuple[str | int | None, str | None]:
         return (n, None) if n else (None, "Введите сумму числом, например 250000.")
     if field in ("arrived", "planned_date"):
         d = _parse_date(value)
-        return (d, None) if d else (None, "Введите дату в формате ДД.ММ.ГГГГ, например 05.10.2026.")
+        return (d, None) if d else (None, "Не разобрал дату. Например: 5.10, 05.10.2026 или 05/10/26.")
     if field == "status":
         return (value, None) if value in pl.STATUS_LABEL else (None, "Выберите статус кнопкой.")
     if field == "stage":
