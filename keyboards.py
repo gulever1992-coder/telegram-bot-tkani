@@ -8,7 +8,7 @@ MENU_ITEMS = [
     ("🎨 Создать картинку", "image"), ("💵 Выплата дизайнеру", "payment"),
     ("📝 Заявление на возврат", "refund"), ("🏷 Ценник на мебель", "tag"),
     ("📋 Коммерческое предложение", "kp"), ("📄 Мои КП", "mykp"),
-    ("📈 Мои сделки", "pipeline"), ("👤 Мой профиль", "profile"),
+    ("📈 Планируемые продажи", "pipeline"), ("👤 Мой профиль", "profile"),
 ]
 MENU_TEXT = dict(MENU_ITEMS)
 
@@ -37,7 +37,7 @@ def main_menu() -> InlineKeyboardMarkup:
     builder.row(InlineKeyboardButton(text="🏷 Ценник на мебель", callback_data="menu:tag"))
     builder.row(InlineKeyboardButton(text="📋 Коммерческое предложение", callback_data="menu:kp"))
     builder.row(InlineKeyboardButton(text="📄 Мои КП", callback_data="menu:mykp"))
-    builder.row(InlineKeyboardButton(text="📈 Мои сделки", callback_data="menu:pipeline"))
+    builder.row(InlineKeyboardButton(text="📈 Планируемые продажи", callback_data="menu:pipeline"))
     builder.row(InlineKeyboardButton(text="👤 Мой профиль", callback_data="menu:profile"))
     return builder.as_markup()
 
