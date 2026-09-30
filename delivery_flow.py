@@ -83,7 +83,8 @@ def _quote_prompt(step: str, q: dict) -> tuple[str, list[tuple[str, str]], bool]
         return (
             "📍 На каком расстоянии от МКАД адрес доставки, км?\n"
             f"Первые {dl.MKAD_FREE_KM} км за МКАД входят в стоимость, дальше +{dl.EXTRA_KM_PRICE} ₽/км.",
-            [("В пределах МКАД", "km:0"), ("20 км", "km:20"), ("30 км", "km:30"), ("50 км", "km:50")],
+            [("В пределах МКАД", "km:0"), ("20 км", "km:20"), ("30 км", "km:30"), ("50 км", "km:50"),
+             ("✏ Указать км", "km:ask")],
             True,
         )
     if step == "lift_mode":
@@ -277,6 +278,9 @@ async def cb_value(call: types.CallbackQuery, state: FSMContext) -> None:
     # phase == quote
     q = data["q"]
     if step == "distance_km":
+        if rest == "ask":
+            await call.message.answer("Напишите расстояние от МКАД, км:")
+            return
         q["distance_km"] = int(rest)
         queue = queue[1:]
     elif step == "lift_mode":
