@@ -128,8 +128,8 @@ def _deal_line(i: int, d: dict) -> str:
 def _list_text(uid: int) -> str:
     items = pl.deals(uid)
     if not items:
-        return "📈 <b>Мои сделки</b>\n\nПока нет ни одной сделки. Добавьте первую кнопкой ниже."
-    lines = ["📈 <b>Мои сделки</b>", ""] + [_deal_line(i, d) for i, d in enumerate(items, 1)]
+        return "📈 <b>Планируемые продажи</b>\n\nПока нет ни одной сделки. Добавьте первую кнопкой ниже."
+    lines = ["📈 <b>Планируемые продажи</b>", ""] + [_deal_line(i, d) for i, d in enumerate(items, 1)]
     lines.append(f"\nИтого потенциально: <b>{rub(pl.total(items))}</b> по {len(items)} сделкам")
     return "\n".join(lines)
 
