@@ -30,6 +30,7 @@ REQUIRED = {"client", "status", "arrived", "planned_date"}
 
 class PipeForm(StatesGroup):
     run = State()
+    lost_reason = State()
 
 
 def _today() -> dt.date:
@@ -139,7 +140,10 @@ def _quick_value(field: str, token: str) -> str | None:
 
 def _deal_line(i: int, d: dict) -> str:
     amount = rub(d["amount"]) if d.get("amount") else "—"
-    return f"{i}. {pl.STATUS_LABEL.get(d['status'], '')} <b>{d['client']}</b> — {amount}"
+    line = f"{i}. {pl.STATUS_LABEL.get(d['status'], '')} <b>{d['client']}</b> — {amount}"
+    if d["status"] == "lost" and d.get("lost_reason"):
+        line += f"\n    Причина: {d['lost_reason']}"
+    return line
 
 
 def _list_text(uid: int) -> str:
@@ -155,7 +159,11 @@ def _list_markup(uid: int) -> types.InlineKeyboardMarkup:
     items = pl.deals(uid)
     b = InlineKeyboardBuilder()
     for i, d in enumerate(items, 1):
-        b.row(InlineKeyboardButton(text=f"✏ {i}. {d['client'][:30]}", callback_data=f"pipe:open:{d['id']}"))
+        b.row(
+            InlineKeyboardButton(text=f"✏ {i}. {d['client'][:22]}", callback_data=f"pipe:open:{d['id']}"),
+            InlineKeyboardButton(text="✅", callback_data=f"pipe:won:{d['id']}"),
+            InlineKeyboardButton(text="❌", callback_data=f"pipe:lost:{d['id']}"),
+        )
     b.row(InlineKeyboardButton(text="➕ Добавить сделку", callback_data="pipe:add"))
     b.row(InlineKeyboardButton(text="🏠 В главное меню", callback_data="menu:home"))
     return b.as_markup()
@@ -171,6 +179,7 @@ def _deal_text(d: dict) -> str:
         f"Статус: {pl.STATUS_LABEL.get(d['status'], '—')}\n"
         f"Планируемая дата продажи: {d.get('planned_date') or '—'}\n"
         f"Что мешает / следующий шаг: {d.get('blocker') or '—'}"
+        + (f"\nПричина отвала: {d['lost_reason']}" if d["status"] == "lost" and d.get("lost_reason") else "")
     )
 
 
@@ -203,6 +212,7 @@ def _report_text(uid: int) -> str:
             f"   Стадия: {d.get('stage') or '—'}\n"
             f"   Планируемая дата: {d.get('planned_date') or '—'}\n"
             f"   Мешает / шаг: {d.get('blocker') or '—'}"
+            + (f"\n   Причина отвала: {d['lost_reason']}" if d["status"] == "lost" and d.get("lost_reason") else "")
         )
     if items:
         lines.append(f"\nИтого потенциально: <b>{rub(pl.total(items))}</b> по {len(items)} сделкам")
@@ -355,6 +365,58 @@ async def cb_edit_field(call: types.CallbackQuery, state: FSMContext) -> None:
     await call.message.answer(text, reply_markup=_ask_markup(field, buttons))
 
 
+@router.callback_query(F.data.startswith("pipe:won:"))
+async def cb_won(call: types.CallbackQuery, state: FSMContext) -> None:
+    deal_id = int(call.data.split(":")[2])
+    d = pl.get(call.from_user.id, deal_id)
+    if not d:
+        await call.answer("Сделка не найдена", show_alert=True)
+        return
+    await state.clear()
+    pl.update(call.from_user.id, deal_id, status="done", lost_reason="")
+    _notify_owner(call.from_user.id)
+    await call.answer("✅ КП превращено в продажу")
+    await call.message.answer(
+        f"✅ <b>{d['client']}</b> — продажа состоялась!\n\n" + _list_text(call.from_user.id),
+        reply_markup=_list_markup(call.from_user.id),
+    )
+
+
+@router.callback_query(F.data.startswith("pipe:lost:"))
+async def cb_lost(call: types.CallbackQuery, state: FSMContext) -> None:
+    deal_id = int(call.data.split(":")[2])
+    d = pl.get(call.from_user.id, deal_id)
+    if not d:
+        await call.answer("Сделка не найдена", show_alert=True)
+        return
+    await state.set_state(PipeForm.lost_reason)
+    await state.update_data(deal_id=deal_id)
+    b = InlineKeyboardBuilder()
+    b.row(InlineKeyboardButton(text="✖ Отмена", callback_data="pipe:cancel"))
+    await call.answer()
+    await call.message.answer(
+        f"❌ <b>{d['client']}</b> — сделка сорвалась.\nНапишите причину отвала:", reply_markup=b.as_markup()
+    )
+
+
+@router.message(PipeForm.lost_reason, F.text)
+async def msg_lost_reason(message: types.Message, state: FSMContext) -> None:
+    data = await state.get_data()
+    reason = message.text.strip()
+    if not reason:
+        await message.answer("Напишите причину текстом.")
+        return
+    uid = message.chat.id
+    d = pl.get(uid, data["deal_id"])
+    await state.clear()
+    if d:
+        pl.update(uid, d["id"], status="lost", lost_reason=reason)
+        _notify_owner(uid)
+        await message.answer(f"❌ <b>{d['client']}</b> — отвал записан.\n\n" + _list_text(uid), reply_markup=_list_markup(uid))
+    else:
+        await message.answer(_list_text(uid), reply_markup=_list_markup(uid))
+
+
 @router.callback_query(F.data.startswith("pipe:del:"))
 async def cb_delete(call: types.CallbackQuery, state: FSMContext) -> None:
     deal_id = int(call.data.split(":")[2])
@@ -366,3 +428,5 @@ async def cb_delete(call: types.CallbackQuery, state: FSMContext) -> None:
     _notify_owner(call.from_user.id)
     await call.answer("Сделка удалена")
     await call.message.answer(_list_text(call.from_user.id), reply_markup=_list_markup(call.from_user.id))
+
+

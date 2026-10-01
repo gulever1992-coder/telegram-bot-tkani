@@ -49,7 +49,7 @@ def _save(uid: int, items: list[dict]) -> None:
 
 def new_deal() -> dict:
     return {"id": 0, "client": "", "amount": None, "arrived": "", "stage": "", "status": "green",
-            "planned_date": "", "blocker": ""}
+            "planned_date": "", "blocker": "", "lost_reason": ""}
 
 
 def add(uid: int, deal: dict) -> dict:
