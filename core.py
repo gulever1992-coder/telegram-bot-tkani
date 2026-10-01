@@ -19,6 +19,7 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import BufferedInputFile
 
 import analytics
+import profiles
 import config
 from utils.ui import show
 import keyboards as kb
@@ -525,9 +526,21 @@ async def _finish(target: types.Message, state: FSMContext, date: dt.date) -> No
         tax=d["tax"], date=date,
     )
     status = await target.answer("⏳ Готовлю документы...")
-    analytics.track(target.chat.id, "payout", data.agent_name)
     pdf = build_agency_package(data)
-    document = BufferedInputFile(pdf.read(), filename=f"Agency_Package_{data.inn}.pdf")
+    pdf_bytes = pdf.read()
+    prof = profiles.get(target.chat.id) or {}
+    analytics.track(
+        target.chat.id, "payout", data.agent_name,
+        document=(pdf_bytes, f"Agency_Package_{data.inn}.pdf"),
+        caption=(
+            f"💵 Выплата дизайнеру — договор №{data.number}\n"
+            f"👤 Менеджер: {prof.get('name') or '—'}\n"
+            f"Исполнитель: {data.agent_name} (ИНН {data.inn})\n"
+            f"Заказ: {data.order_name}\n"
+            f"Вознаграждение: {data.reward}"
+        ),
+    )
+    document = BufferedInputFile(pdf_bytes, filename=f"Agency_Package_{data.inn}.pdf")
     await target.answer_document(
         document=document,
         caption=f"Готово! Договор № {data.number}: договор, реквизиты, отчёт, счёт и акт.",
