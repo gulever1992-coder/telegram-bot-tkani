@@ -26,6 +26,10 @@ MSK = dt.timezone(dt.timedelta(hours=3))
 LAST_MANAGER: dict[int, tuple[str, str]] = {}  # пока бот работает, помним менеджера
 
 
+class MyKP(StatesGroup):
+    lost_reason = State()
+
+
 class KPForm(StatesGroup):
     run = State()
 
@@ -763,7 +767,8 @@ async def cb_my_kp(call: types.CallbackQuery, state: FSMContext) -> None:
     await state.clear()
     uid = call.from_user.id
     mine = sorted(
-        (e for e in analytics.EVENTS if e.get("kind") == "kp" and e["uid"] == uid and e["data"].get("state")),
+        (e for e in analytics.EVENTS if e.get("kind") == "kp" and e["uid"] == uid and e["data"].get("state")
+         and not e["data"].get("closed")),
         key=lambda e: -e["ts"],
     )[:15]
     b = InlineKeyboardBuilder()
@@ -777,14 +782,90 @@ async def cb_my_kp(call: types.CallbackQuery, state: FSMContext) -> None:
     for i, e in enumerate(mine):
         d = e["data"]
         label = f"№{d.get('number', '')} · {d.get('customer') or 'без заказчика'} · {rub(d.get('sum', 0))}"
-        b.row(InlineKeyboardButton(text=label[:64], callback_data=f"kp:hist:{i}"))
+        b.row(
+            InlineKeyboardButton(text=label[:34], callback_data=f"kp:hist:{i}"),
+            InlineKeyboardButton(text="✅", callback_data=f"kp:won:{i}"),
+            InlineKeyboardButton(text="❌", callback_data=f"kp:lost:{i}"),
+        )
     b.row(InlineKeyboardButton(text="🏠 В главное меню", callback_data="menu:home"))
     await show(
         call.message,
-        "📄 <b>Ваши КП</b> — выберите, чтобы поправить и выпустить заново:",
+        "📄 <b>Ваши КП</b> — выберите, чтобы поправить и выпустить заново." "\n\n"
+        "✅ — клиент купил (КП уйдёт из списка), ❌ — клиент отказался (нужно написать причину):",
         reply_markup=b.as_markup(),
     )
     await call.answer()
+
+
+def _find_event(uid: int, ts: int, number) -> dict | None:
+    return next(
+        (e for e in analytics.EVENTS
+         if e.get("kind") == "kp" and e["uid"] == uid and e["ts"] == ts and e["data"].get("number") == number),
+        None,
+    )
+
+
+def _close_kp(ev: dict, outcome: str, reason: str = "") -> None:
+    ev["data"]["closed"] = outcome
+    if reason:
+        ev["data"]["lost_reason"] = reason
+    analytics._persist_soon()
+    d = ev["data"]
+    head = "✅ КП превращено в продажу" if outcome == "won" else "❌ КП: клиент отказался"
+    text = (
+        f"{head} — {ev.get('name') or 'менеджер'}" + "\n"
+        + f"№{d.get('number', '')} · <b>{d.get('customer') or 'без заказчика'}</b> · {rub(d.get('sum', 0))}"
+    )
+    if reason:
+        text += "\n" + f"Причина: {reason}"
+    analytics.notify(text)
+
+
+@router.callback_query(F.data.startswith("kp:won:"))
+async def cb_hist_won(call: types.CallbackQuery, state: FSMContext) -> None:
+    mine = (await state.get_data()).get("history") or []
+    idx = int(call.data.split(":")[2])
+    ev = _find_event(call.from_user.id, mine[idx]["ts"], mine[idx]["data"].get("number")) if idx < len(mine) else None
+    if not ev:
+        await call.answer("Список устарел, откройте «Мои КП» заново", show_alert=True)
+        return
+    _close_kp(ev, "won")
+    await cb_my_kp(call, state)
+
+
+@router.callback_query(F.data.startswith("kp:lost:"))
+async def cb_hist_lost(call: types.CallbackQuery, state: FSMContext) -> None:
+    mine = (await state.get_data()).get("history") or []
+    idx = int(call.data.split(":")[2])
+    ev = _find_event(call.from_user.id, mine[idx]["ts"], mine[idx]["data"].get("number")) if idx < len(mine) else None
+    if not ev:
+        await call.answer("Список устарел, откройте «Мои КП» заново", show_alert=True)
+        return
+    await state.set_state(MyKP.lost_reason)
+    await state.update_data(ts=ev["ts"], number=ev["data"].get("number"))
+    b = InlineKeyboardBuilder()
+    b.row(InlineKeyboardButton(text="✖ Отмена", callback_data="menu:mykp"))
+    await call.answer()
+    await call.message.answer(
+        f"❌ КП №{ev['data'].get('number', '')} · {ev['data'].get('customer') or 'без заказчика'}" + "\n"
+        + "Напишите причину отказа:",
+        reply_markup=b.as_markup(),
+    )
+
+
+@router.message(MyKP.lost_reason, F.text)
+async def msg_kp_lost_reason(message: types.Message, state: FSMContext) -> None:
+    data = await state.get_data()
+    reason = message.text.strip()
+    if not reason:
+        await message.answer("Напишите причину текстом.")
+        return
+    ev = _find_event(message.chat.id, data["ts"], data["number"])
+    await state.clear()
+    if ev:
+        _close_kp(ev, "lost", reason)
+        await message.answer("❌ Отказ записан, КП убрано из списка.")
+    await message.answer("Откройте «📄 Мои КП», чтобы увидеть обновлённый список.")
 
 
 @router.callback_query(F.data.startswith("kp:hist:"))
