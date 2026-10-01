@@ -47,7 +47,8 @@ jobs:
         run: timeout --signal=SIGINT 20400 python bot.py || true
 
       - name: Start the next run
-        if: success() || failure()
+        # always(): и после обрыва или отмены, иначе бот ждёт ежечасной проверки
+        if: always()
         env:
           GH_TOKEN: ${{ github.token }}
         run: gh workflow run bot.yml --repo "$GITHUB_REPOSITORY" --ref "${{ github.ref_name }}"
