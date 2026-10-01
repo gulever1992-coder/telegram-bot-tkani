@@ -219,6 +219,16 @@ def _report_text(uid: int) -> str:
     return "\n".join(lines)
 
 
+def _notify_closed(uid: int, d: dict, reason: str | None) -> None:
+    prof = profiles.get(uid) or {}
+    amount = rub(d["amount"]) if d.get("amount") else "не указана"
+    head = "✅ Продажа состоялась" if reason is None else "❌ Сделка сорвалась"
+    text = f"{head} — {prof.get('name') or 'менеджер'}\n<b>{d['client']}</b>, потенциально {amount}"
+    if reason is not None:
+        text += f"\nПричина: {reason}"
+    analytics.notify(text)
+
+
 def _notify_owner(uid: int) -> None:
     analytics.notify(_report_text(uid))
 
@@ -373,11 +383,12 @@ async def cb_won(call: types.CallbackQuery, state: FSMContext) -> None:
         await call.answer("Сделка не найдена", show_alert=True)
         return
     await state.clear()
-    pl.update(call.from_user.id, deal_id, status="done", lost_reason="")
+    _notify_closed(call.from_user.id, d, None)
+    pl.remove(call.from_user.id, deal_id)
     _notify_owner(call.from_user.id)
     await call.answer("✅ КП превращено в продажу")
     await call.message.answer(
-        f"✅ <b>{d['client']}</b> — продажа состоялась!\n\n" + _list_text(call.from_user.id),
+        f"✅ <b>{d['client']}</b> — продажа состоялась и убрана из списка!\n\n" + _list_text(call.from_user.id),
         reply_markup=_list_markup(call.from_user.id),
     )
 
@@ -410,9 +421,10 @@ async def msg_lost_reason(message: types.Message, state: FSMContext) -> None:
     d = pl.get(uid, data["deal_id"])
     await state.clear()
     if d:
-        pl.update(uid, d["id"], status="lost", lost_reason=reason)
+        _notify_closed(uid, d, reason)
+        pl.remove(uid, d["id"])
         _notify_owner(uid)
-        await message.answer(f"❌ <b>{d['client']}</b> — отвал записан.\n\n" + _list_text(uid), reply_markup=_list_markup(uid))
+        await message.answer(f"❌ <b>{d['client']}</b> — отвал записан и сделка убрана из списка.\n\n" + _list_text(uid), reply_markup=_list_markup(uid))
     else:
         await message.answer(_list_text(uid), reply_markup=_list_markup(uid))
 
