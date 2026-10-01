@@ -134,7 +134,7 @@ async def _finish(target: types.Message, state: FSMContext, user: types.User) ->
     await state.clear()
     await target.answer("✅ Готово, данные сохранены.", reply_markup=ReplyKeyboardRemove())
     await target.answer(profiles.render(saved).split("\n\n")[0])
-    await target.answer("Выберите действие в меню внизу 👇", reply_markup=kb.reply_menu())
+    await target.answer(kb.WELCOME_FULL, reply_markup=kb.reply_menu())
     analytics.track(user.id, "register" if was_new else "profile", saved.get("name", ""))
 
 

@@ -64,7 +64,7 @@ def secret_token() -> str:
 @router.message(CommandStart())
 async def cmd_start(message: types.Message, state: FSMContext) -> None:
     await state.clear()
-    await message.answer(WELCOME_TEXT, reply_markup=kb.reply_menu())
+    await message.answer(kb.WELCOME_FULL, reply_markup=kb.reply_menu())
 
 
 @router.callback_query(F.data == "menu:home")
