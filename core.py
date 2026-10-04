@@ -663,11 +663,15 @@ async def pay_skip(call: types.CallbackQuery, state: FSMContext) -> None:
     await call.answer()  # сразу снимаем «часики» с кнопки
     field, next_state, question, markup = step
     await state.update_data({field: PAY_SKIP_DEFAULT.get(field, "-")})
-    await asyncio.gather(
-        call.message.edit_text(f"{call.message.html_text}\n<i>⏭ пропущено</i>"),
-        _ask(call.message, state, next_state, question, markup),
-        return_exceptions=True,
-    )
+    await _ask(call.message, state, next_state, question, markup)  # следующий вопрос — сразу
+    asyncio.create_task(_mark_skipped(call.message))  # пометку и снятие кнопок — в фоне
+
+
+async def _mark_skipped(message: types.Message) -> None:
+    try:
+        await message.edit_text(f"{message.html_text}\n<i>⏭ пропущено</i>")
+    except Exception:
+        pass  # сообщение уже изменено/удалено — не важно
 
 
 @router.message(PersonPayForm.order_name, F.text)
