@@ -355,12 +355,13 @@ def _amount(text: str) -> float | None:
 async def _ask(target: types.Message, state: FSMContext, new_state, question: str, markup=None) -> None:
     await state.set_state(new_state)
     if markup is None and str(new_state) in PAY_SKIPPABLE:
-        markup = _skip_keyboard()
+        markup = _skip_keyboard(new_state)
     await target.answer(question, reply_markup=markup or kb.cancel_keyboard())
 
 
-def _skip_keyboard():
-    return kb.choice_keyboard("⏭ Пропустить", "pay:skip")
+def _skip_keyboard(step) -> types.InlineKeyboardMarkup:
+    """«Пропустить» привязана к своему шагу: старая кнопка выше в чате не пропустит текущий вопрос."""
+    return kb.choice_keyboard("⏭ Пропустить", f"pay:skip:{step.state}")
 
 
 @router.callback_query(F.data == "menu:payment")
@@ -401,7 +402,7 @@ async def pay_name(message: types.Message, state: FSMContext) -> None:
 async def pay_inn(message: types.Message, state: FSMContext) -> None:
     inn = _digits(message.text)
     if len(inn) not in (10, 12):
-        await message.answer("ИНН — только цифры, 10 или 12 штук (например 500100732259). Введите ещё раз или нажмите «Отмена»:", reply_markup=kb.cancel_keyboard())
+        await message.answer("ИНН — только цифры, 10 или 12 штук (например 500100732259). Введите ещё раз или нажмите «Отмена»:", reply_markup=_skip_keyboard(PaymentForm.inn))
         return
     await state.update_data(inn=inn)
     await _ask(
@@ -433,7 +434,7 @@ async def pay_address(message: types.Message, state: FSMContext) -> None:
 async def pay_rs(message: types.Message, state: FSMContext) -> None:
     rs = _digits(message.text)
     if len(rs) != 20:
-        await message.answer("Р/с — только цифры, ровно 20 штук. Введите ещё раз или нажмите «Отмена»:", reply_markup=kb.cancel_keyboard())
+        await message.answer("Р/с — только цифры, ровно 20 штук. Введите ещё раз или нажмите «Отмена»:", reply_markup=_skip_keyboard(PaymentForm.rs))
         return
     await state.update_data(rs=rs)
     await _ask(message, state, PaymentForm.bank, "6. Название банка (например: Филиал № 7701 Банка ВТБ (ПАО) в г. Москве):")
@@ -449,7 +450,7 @@ async def pay_bank(message: types.Message, state: FSMContext) -> None:
 async def pay_ks(message: types.Message, state: FSMContext) -> None:
     ks = _digits(message.text)
     if len(ks) != 20:
-        await message.answer("К/с — только цифры, ровно 20 штук. Введите ещё раз или нажмите «Отмена»:", reply_markup=kb.cancel_keyboard())
+        await message.answer("К/с — только цифры, ровно 20 штук. Введите ещё раз или нажмите «Отмена»:", reply_markup=_skip_keyboard(PaymentForm.ks))
         return
     await state.update_data(ks=ks)
     await _ask(message, state, PaymentForm.bik, "8. БИК банка (9 цифр):")
@@ -459,22 +460,22 @@ async def pay_ks(message: types.Message, state: FSMContext) -> None:
 async def pay_bik(message: types.Message, state: FSMContext) -> None:
     bik = _digits(message.text)
     if len(bik) != 9:
-        await message.answer("БИК — только цифры, ровно 9 штук (например 044525000). Введите ещё раз или нажмите «Отмена»:", reply_markup=kb.cancel_keyboard())
+        await message.answer("БИК — только цифры, ровно 9 штук (например 044525000). Введите ещё раз или нажмите «Отмена»:", reply_markup=_skip_keyboard(PaymentForm.bik))
         return
     await state.update_data(bik=bik)
-    await _ask(message, state, PaymentForm.phone, "9. Телефон дизайнера:", kb.choice_keyboard("⏭ Пропустить", "pay:skip"))
+    await _ask(message, state, PaymentForm.phone, "9. Телефон дизайнера:")
 
 
 @router.message(PaymentForm.phone, F.text)
 async def pay_phone(message: types.Message, state: FSMContext) -> None:
     await state.update_data(phone=message.text.strip())
-    await _ask(message, state, PaymentForm.email, "10. Email дизайнера:", kb.choice_keyboard("⏭ Пропустить", "pay:skip"))
+    await _ask(message, state, PaymentForm.email, "10. Email дизайнера:")
 
 
 @router.message(PaymentForm.email, F.text)
 async def pay_email(message: types.Message, state: FSMContext) -> None:
     if "@" not in message.text:
-        await message.answer("Похоже, это не email. Введите ещё раз:", reply_markup=kb.choice_keyboard("⏭ Пропустить", "pay:skip"))
+        await message.answer("Похоже, это не email. Введите ещё раз:", reply_markup=_skip_keyboard(PaymentForm.email))
         return
     await state.update_data(email=message.text.strip())
     await _ask(
@@ -510,7 +511,7 @@ async def pay_reward(message: types.Message, state: FSMContext) -> None:
         message, state, PaymentForm.tax, "14. Налогообложение, % (нажмите «20» или введите своё):",
         types.InlineKeyboardMarkup(inline_keyboard=[
             [types.InlineKeyboardButton(text="20", callback_data="pay:tax20")],
-            [types.InlineKeyboardButton(text="⏭ Пропустить", callback_data="pay:skip")],
+            [types.InlineKeyboardButton(text="⏭ Пропустить (без налога, 0%)", callback_data=f"pay:skip:{PaymentForm.tax.state}")],
             [types.InlineKeyboardButton(text="✖ Отмена", callback_data="menu:home")],
         ]),
     )
@@ -526,18 +527,22 @@ async def _ask_date(target: types.Message, state: FSMContext) -> None:
 
 @router.callback_query(F.data == "pay:tax20", PaymentForm.tax)
 async def pay_tax_default(call: types.CallbackQuery, state: FSMContext) -> None:
-    await state.update_data(tax="20")
     await call.answer()
+    await state.update_data(tax="20")
     await _ask_date(call.message, state)
 
 
 @router.message(PaymentForm.tax, F.text)
 async def pay_tax(message: types.Message, state: FSMContext) -> None:
-    tax = message.text.strip().replace("%", "").replace(",", ".")
-    if _amount(tax) is None:
-        await message.answer("Введите процент числом, например 20. Ещё раз:", reply_markup=kb.cancel_keyboard())
+    tax = message.text.strip().replace("%", "").replace(" ", "").replace(",", ".")
+    try:
+        value = float(tax)
+    except ValueError:
+        value = -1
+    if not 0 <= value <= 100:
+        await message.answer("Введите процент числом от 0 до 100, например 0 или 20. Ещё раз:", reply_markup=kb.cancel_keyboard())
         return
-    await state.update_data(tax=tax)
+    await state.update_data(tax=f"{value:g}")
     await _ask_date(message, state)
 
 
@@ -550,7 +555,7 @@ async def _finish(target: types.Message, state: FSMContext, date: dt.date) -> No
         tax=d["tax"], date=date,
     )
     status = await target.answer("⏳ Готовлю документы...")
-    pdf = build_agency_package(data)
+    pdf = await asyncio.to_thread(build_agency_package, data)  # PDF собирается в фоне, бот не замирает
     pdf_bytes = pdf.read()
     prof = profiles.get(target.chat.id) or {}
     analytics.track(
@@ -622,7 +627,7 @@ async def pay_type_person(call: types.CallbackQuery, state: FSMContext) -> None:
     await show(call.message,
         "👤 <b>Перевод на карту (физ. лицо)</b>\n\n"
         "1. ФИО клиента или название заказа:",
-        reply_markup=kb.choice_keyboard("⏭ Пропустить", "pay:skip"),
+        reply_markup=_skip_keyboard(PersonPayForm.order_name),
     )
     await call.answer()
 
@@ -645,20 +650,24 @@ PAY_SKIP_NEXT = {
     PersonPayForm.bank: ("bank", PersonPayForm.amount, "4. Сумма заказа, руб.:", None),
 }
 PAY_SKIPPABLE = {str(state) for state in PAY_SKIP_NEXT}
-PAY_SKIP_DEFAULT = {"tax": "20"}  # что сохраняется при пропуске; остальные поля — «-»
+PAY_SKIP_DEFAULT = {"tax": "0"}  # что сохраняется при пропуске; остальные поля — «-»
 
 
-@router.callback_query(F.data == "pay:skip")
+@router.callback_query(F.data.startswith("pay:skip:"))
 async def pay_skip(call: types.CallbackQuery, state: FSMContext) -> None:
     current = await state.get_state()
     step = next((v for k, v in PAY_SKIP_NEXT.items() if k.state == current), None)
-    if step is None:
-        await call.answer()
+    if step is None or call.data.removeprefix("pay:skip:") != current:
+        await call.answer("Этот вопрос уже пройден — ответьте на последний.")
         return
+    await call.answer()  # сразу снимаем «часики» с кнопки
     field, next_state, question, markup = step
     await state.update_data({field: PAY_SKIP_DEFAULT.get(field, "-")})
-    await call.answer()
-    await _ask(call.message, state, next_state, question, markup)
+    await asyncio.gather(
+        call.message.edit_text(f"{call.message.html_text}\n<i>⏭ пропущено</i>"),
+        _ask(call.message, state, next_state, question, markup),
+        return_exceptions=True,
+    )
 
 
 @router.message(PersonPayForm.order_name, F.text)
@@ -670,10 +679,7 @@ async def person_order(message: types.Message, state: FSMContext) -> None:
 @router.message(PersonPayForm.designer, F.text)
 async def person_designer(message: types.Message, state: FSMContext) -> None:
     await state.update_data(designer=message.text.strip())
-    await _ask(
-        message, state, PersonPayForm.bank, "3. Банк получателя (например: Сбербанк):",
-        kb.choice_keyboard("⏭ Пропустить", "pay:skip"),
-    )
+    await _ask(message, state, PersonPayForm.bank, "3. Банк получателя (например: Сбербанк):")
 
 
 @router.message(PersonPayForm.bank, F.text)

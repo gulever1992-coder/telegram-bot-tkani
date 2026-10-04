@@ -20,6 +20,7 @@ from reportlab.lib.units import mm
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.platypus import (
+    Flowable,
     Image,
     KeepTogether,
     PageBreak,
@@ -90,6 +91,15 @@ def fmt(x: float) -> str:
     return f"{x:,.2f}"
 
 
+def tax_sum(data: "AgencyData") -> str:
+    """Сумма налога по ставке из отчёта (от вознаграждения), руб. — при 0% будет 0,00."""
+    try:
+        rate = float(str(data.tax).replace(",", "."))
+    except ValueError:
+        rate = 0.0
+    return fmt(round(data.reward * rate / 100, 2))
+
+
 def words(x: float) -> str:
     text = num2words(round(x, 2), lang="ru")
     return text[:1].upper() + text[1:]
@@ -111,10 +121,33 @@ def _image(name: str, width: float, height: float):
     return Spacer(width, height)
 
 
-def _sign_block() -> Table:
-    t = Table([[_image("signature.png", 44, 30), _image("stamp.png", 65, 62)]], colWidths=[78, 70])
-    t.setStyle(TableStyle([("VALIGN", (0, 0), (-1, -1), "MIDDLE"), ("LEFTPADDING", (0, 0), (-1, -1), 0)]))
-    return t
+class _SignStamp(Flowable):
+    """Строка «____ / Фамилия И. О. /» с подписью на линии и печатью, заходящей на подпись (М.П.)."""
+
+    LINE = "________________"
+
+    def __init__(self, name: str):
+        super().__init__()
+        self.name = name
+        self.width, self.height = 240, 78
+
+    def draw(self):
+        c = self.canv
+        base_y = 30  # базовая линия строки подписи
+        x0 = 56  # слева от линии место под печать (М.П.)
+        c.setFont(FONT, 8)
+        c.drawString(x0, base_y, f"{self.LINE} / {self.name} /")
+        line_w = c.stringWidth(self.LINE, FONT, 8)
+        sig = os.path.join(ROOT, "assets", "signature.png")
+        stamp = os.path.join(ROOT, "assets", "stamp.png")
+        if os.path.exists(stamp):  # печать слева, заходит на начало линии подписи
+            c.drawImage(stamp, 0, 0, 76, 76, mask="auto")
+        if os.path.exists(sig):  # подпись — на линии, правее печати, расшифровка остаётся открытой
+            c.drawImage(sig, x0 + line_w * 0.25, base_y - 8, 54, 38, mask="auto")
+
+
+def _sign_block(name: str) -> Flowable:
+    return _SignStamp(name)
 
 
 CONTRACT = [
@@ -217,7 +250,7 @@ def build_agency_package(data: AgencyData) -> io.BytesIO:
         )
     )
     for kind, text in CONTRACT:
-        text = text.replace("{tax}", data.tax)
+        text = text.replace("{tax}%", f"{data.tax}% ({tax_sum(data)} руб.)")
         if kind == "h":
             story.append(para(text, head))
         elif kind == "b":
@@ -256,8 +289,7 @@ def build_agency_package(data: AgencyData) -> io.BytesIO:
         para(f"Тел.: {P['phone']}", cell),
         Spacer(1, 6),
         para(f"Генеральный директор {P['short']}:", cell),
-        _sign_block(),
-        para(f"________________ / {P['director_short']} /", cell),
+        _sign_block(P["director_short"]),
     ]
     req = Table([[agent_cell, principal_cell]], colWidths=[257, 258])
     req.setStyle(TableStyle([("BOX", (0, 0), (-1, -1), 0.5, colors.grey), ("INNERGRID", (0, 0), (-1, -1), 0.5, colors.grey), ("VALIGN", (0, 0), (-1, -1), "TOP")]))
@@ -300,7 +332,7 @@ def build_agency_package(data: AgencyData) -> io.BytesIO:
         rep,
         Spacer(1, 6),
         para("За отчетный период Агент надлежащим образом (качественно и в срок) выполнил свои обязательства по привлечению клиентов.", base),
-        para(f"Сумма агентского вознаграждения составляет: {rub_line(reward)}, налогообложение: {data.tax}%.", base),
+        para(f"Сумма агентского вознаграждения составляет: {rub_line(reward)}, налогообложение: {data.tax}% ({tax_sum(data)} руб.).", base),
         para("Настоящий Отчет составлен в двух экземплярах, имеющих равную юридическую силу, по одному для каждой из Сторон. Возражения по Отчету принимаются в течение 5 рабочих дней с момента получения.", just),
         Spacer(1, 14),
     ]
@@ -309,7 +341,7 @@ def build_agency_package(data: AgencyData) -> io.BytesIO:
             [para("Отчет сдал (Агент):", cell), para(data.agent_name, cell), para(f"ИНН: {data.inn}", cell), Spacer(1, 26),
              para(f"________________ / {data.agent_name} /", cell), para("М.П.", cell)],
             [para("Отчет принял (Принципал):", cell), para(P["short"], cell), para("Генеральный директор", cell),
-             Spacer(1, 4), _sign_block(), para(f"________________ / {P['director_short']} /", cell)],
+             Spacer(1, 4), _sign_block(P["director_short"])],
         ]],
         colWidths=[257, 258],
     )
@@ -353,7 +385,7 @@ def build_agency_package(data: AgencyData) -> io.BytesIO:
         Spacer(1, 6),
         para(f"Всего наименований 1, на сумму {fmt(reward)} руб.", base),
         para(f"Итого к оплате: {rub_line(reward)}", base),
-        para(f"Налогообложение: {data.tax}%.", base),
+        para(f"Налогообложение: {data.tax}% — {tax_sum(data)} руб.", base),
         Spacer(1, 16),
         para(f"Руководитель / Предприниматель: ____________________ / {data.agent_name} /", base),
         Spacer(1, 10),
@@ -396,7 +428,7 @@ def build_agency_package(data: AgencyData) -> io.BytesIO:
         act,
         Spacer(1, 6),
         para(f"Всего оказано услуг 1, на сумму {fmt(reward)} руб. {int(round((reward - int(reward)) * 100)):02d} коп.", base),
-        para(f"Итого: {rub_line(reward, 'рублей {k:02d} копеек')}. Налогообложение: {data.tax}%.", base),
+        para(f"Итого: {rub_line(reward, 'рублей {k:02d} копеек')}. Налогообложение: {data.tax}% ({tax_sum(data)} руб.).", base),
         para("Вышеперечисленные услуги выполнены полностью и в срок. Заказчик претензий по объему, качеству и срокам оказания услуг не имеет.", base),
         Spacer(1, 16),
     ]
@@ -405,7 +437,7 @@ def build_agency_package(data: AgencyData) -> io.BytesIO:
             [para("ИСПОЛНИТЕЛЬ:", cell), para(data.agent_name, cell), para(f"ИНН: {data.inn}", cell), Spacer(1, 26),
              para(f"________________ / {data.agent_name} /", cell), para("М.П.", cell)],
             [para("ЗАКАЗЧИК:", cell), para(P["short_caps"], cell), para("Генеральный директор", cell),
-             Spacer(1, 4), _sign_block(), para(f"________________ / {P['director_short']} /", cell)],
+             Spacer(1, 4), _sign_block(P["director_short"])],
         ]],
         colWidths=[257, 258],
     )
