@@ -644,7 +644,7 @@ PAY_SKIPPABLE = {str(state) for state in PAY_SKIP_NEXT}
 @router.callback_query(F.data == "pay:skip")
 async def pay_skip(call: types.CallbackQuery, state: FSMContext) -> None:
     current = await state.get_state()
-    step = next((v for k, v in PAY_SKIP_NEXT.items() if str(k) == current), None)
+    step = next((v for k, v in PAY_SKIP_NEXT.items() if k.state == current), None)
     if step is None:
         await call.answer()
         return
