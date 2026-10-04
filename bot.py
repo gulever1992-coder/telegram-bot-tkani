@@ -18,6 +18,9 @@ async def main() -> None:
     bot = make_bot()
     await bot.delete_webhook(drop_pending_updates=True)
     tasks = [asyncio.create_task(dp.start_polling(bot), name="main-bot")]
+    from utils import pricelist
+
+    tasks.append(asyncio.create_task(pricelist.warm_loop(), name="price-warm"))  # прайс заранее в памяти
 
     admin_bot = None
     if config.ADMIN_BOT_TOKEN:

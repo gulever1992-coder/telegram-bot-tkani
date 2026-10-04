@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import csv
 import io
+import logging
 import re
 import time
 import urllib.parse
@@ -31,6 +32,10 @@ NEW_SHEETS = [
 CACHE_TTL = 600
 
 _cache: dict[str, tuple[float, list[list[str]]]] = {}
+_inflight: dict[str, asyncio.Future] = {}
+_refreshing: set[str] = set()
+_limit = asyncio.Semaphore(3)  # не больше 3 запросов к Google одновременно
+log = logging.getLogger("pricelist")
 
 
 class PriceError(RuntimeError):
@@ -100,25 +105,66 @@ def first_number(text: str) -> int | None:
     return int(m.group()) if m else None
 
 
-async def _fetch_sheet(name: str) -> list[list[str]]:
-    cached = _cache.get(name)
-    if cached and time.time() - cached[0] < CACHE_TTL:
-        return cached[1]
+async def _download(name: str) -> list[list[str]]:
+    """Скачать лист. Одновременные запросы одного листа объединяются в один."""
+    task = _inflight.get(name)
+    if task is None:
+        task = asyncio.ensure_future(_download_once(name))
+        _inflight[name] = task
+        task.add_done_callback(lambda _t, n=name: _inflight.pop(n, None))
+    return await asyncio.shield(task)
+
+
+async def _download_once(name: str) -> list[list[str]]:
     url = (
         f"https://docs.google.com/spreadsheets/d/{config.PRICELIST_SHEET_ID}/gviz/tq"
         f"?tqx=out:csv&sheet={urllib.parse.quote(name)}"
     )
+    started = time.time()
     try:
-        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=30)) as session:
-            async with session.get(url) as resp:
-                if resp.status != 200:
-                    raise PriceError(f"Не удалось загрузить лист «{name}» (код {resp.status}).")
-                raw = await resp.read()
-    except (aiohttp.ClientError, asyncio.TimeoutError, OSError):
+        async with _limit:
+            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=15, sock_connect=8)) as session:
+                async with session.get(url) as resp:
+                    if resp.status != 200:
+                        raise PriceError(f"Не удалось загрузить лист «{name}» (код {resp.status}).")
+                    raw = await resp.read()
+    except (aiohttp.ClientError, asyncio.TimeoutError, OSError) as exc:
+        log.warning("прайс: лист «%s» не загрузился за %.1f с: %r", name, time.time() - started, exc)
         raise PriceError("Нет связи с прайсом (Google Таблицей). Попробуйте ещё раз через минуту.") from None
     rows = list(csv.reader(io.StringIO(raw.decode("utf-8-sig"))))
     _cache[name] = (time.time(), rows)
+    log.info("прайс: лист «%s» — %d строк за %.1f с", name, len(rows), time.time() - started)
     return rows
+
+
+async def _refresh(name: str) -> None:
+    try:
+        await _download(name)
+    except Exception:  # noqa: BLE001 — остаёмся на прежней копии
+        pass
+    finally:
+        _refreshing.discard(name)
+
+
+async def _fetch_sheet(name: str) -> list[list[str]]:
+    """Лист из памяти сразу (устаревший — обновляется в фоне); сеть ждём, только если копии ещё нет."""
+    cached = _cache.get(name)
+    if cached:
+        if time.time() - cached[0] >= CACHE_TTL and name not in _refreshing:
+            _refreshing.add(name)
+            asyncio.create_task(_refresh(name))
+        return cached[1]
+    return await _download(name)
+
+
+async def warm_loop() -> None:
+    """Держит прайс в памяти: загрузка при старте бота и обновление раз в CACHE_TTL."""
+    while True:
+        started = time.time()
+        results = await asyncio.gather(*[_download(n) for n in [PROMO_SHEET, *NEW_SHEETS]], return_exceptions=True)
+        errors = sum(isinstance(r, Exception) for r in results)
+        log.info("прайс обновлён за %.1f с, ошибок: %d", time.time() - started, errors)
+        await asyncio.sleep(CACHE_TTL if not errors else 30)
 
 
 def _cell(row: list[str], i: int | None) -> str:

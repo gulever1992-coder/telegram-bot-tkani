@@ -466,9 +466,10 @@ def _after_carry(q: dict, meters: int, queue: list[str]) -> list[str]:
 async def _search_item(message: types.Message, state: FSMContext, query: str) -> None:
     status = await message.answer("🔎 Ищу в прайсе...")
     try:
-        items = await pricelist.search_catalog(query)
-    except pricelist.PriceError as exc:
-        await status.edit_text(f"⚠ {exc}\nВыберите тип вручную:", reply_markup=_category_markup())
+        items = await asyncio.wait_for(pricelist.search_catalog(query), timeout=20)
+    except (pricelist.PriceError, asyncio.TimeoutError):
+        await status.edit_text("⚠ Прайс сейчас не отвечает. Выберите тип изделия — посчитаю без сборки:",
+                               reply_markup=_category_markup())
         return
     found = [
         {"title": it.title, "category": SOURCE_CATEGORY.get(it.source, "big"), "asm": int(it.assembly or 0),
