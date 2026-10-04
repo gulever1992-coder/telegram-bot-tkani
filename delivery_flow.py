@@ -12,12 +12,15 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import InlineKeyboardButton
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
+import logging
+
 import analytics
 import delivery as dl
 from utils import pricelist, regions
 from utils.kp import rub
 
 router = Router()
+log = logging.getLogger("delivery")
 REGIONS_URL = (
     "https://docs.google.com/spreadsheets/d/1d3UN8U5H-SEFK_xApNV34b5PWk4G8ah3-NUuYz_3cxQ/"
     "edit?gid=2086428513#gid=2086428513"
@@ -467,10 +470,12 @@ async def _search_item(message: types.Message, state: FSMContext, query: str) ->
     status = await message.answer("🔎 Ищу в прайсе...")
     try:
         items = await asyncio.wait_for(pricelist.search_catalog(query), timeout=20)
-    except (pricelist.PriceError, asyncio.TimeoutError):
-        await status.edit_text("⚠ Прайс сейчас не отвечает. Выберите тип изделия — посчитаю без сборки:",
-                               reply_markup=_category_markup())
+    except (pricelist.PriceError, asyncio.TimeoutError) as exc:
+        log.warning("доставка: поиск «%s» не удался: %r", query, exc)
+        await _replace(status, "⚠ Прайс сейчас не отвечает. Выберите тип изделия — посчитаю без сборки:",
+                       _category_markup())
         return
+    log.info("доставка: поиск «%s» — найдено %d", query, len(items))
     found = [
         {"title": it.title, "category": SOURCE_CATEGORY.get(it.source, "big"), "asm": int(it.assembly or 0),
          "size": "x".join(str(v) for v in it.dims) if it.dims else it.size_raw,
@@ -479,8 +484,7 @@ async def _search_item(message: types.Message, state: FSMContext, query: str) ->
     ]
     await state.update_data(last_query=query)
     if not found:
-        await status.edit_text(f"«{query}» в прайсе не нашёл. Напишите иначе или выберите тип:",
-                               reply_markup=_category_markup())
+        await _replace(status, f"«{query}» в прайсе не нашёл. Напишите иначе или выберите тип:", _category_markup())
         return
     if len(found) == 1:  # единственный вариант — выбираем сами, без лишней кнопки
         await _select_found(status, state, found[0], edit=True)
@@ -495,7 +499,17 @@ async def _search_item(message: types.Message, state: FSMContext, query: str) ->
     b.row(InlineKeyboardButton(text="📦 Нет в списке", callback_data="deliv:manual"),
           InlineKeyboardButton(text="✖ Отмена", callback_data="menu:home"))
     head = f"<b>{found[0]['title']}</b> — выберите размер:" if same_title else "Выберите модель и размер:"
-    await status.edit_text(head, reply_markup=b.as_markup())
+    await _replace(status, head, b.as_markup())
+
+
+async def _replace(status: types.Message, text: str, markup) -> None:
+    """Заменить «Ищу…» результатом; если правка не прошла — прислать новым сообщением."""
+    try:
+        await status.edit_text(text, reply_markup=markup)
+        log.info("доставка: поиск — ответ показан (msg %s)", status.message_id)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("доставка: не удалось изменить сообщение %s: %r", status.message_id, exc)
+        await status.answer(text, reply_markup=markup)
 
 
 @router.callback_query(F.data == "deliv:manual", DeliveryForm.run)
