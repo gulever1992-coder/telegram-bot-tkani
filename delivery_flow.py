@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import re
 
 from aiogram import F, Router, types
@@ -22,6 +23,13 @@ REGIONS_URL = (
     "edit?gid=2086428513#gid=2086428513"
 )
 
+async def _warm_price() -> None:
+    try:
+        await pricelist.search_catalog("прогрев")
+    except Exception:
+        pass
+
+
 class DeliveryForm(StatesGroup):
     run = State()
 
@@ -31,9 +39,27 @@ def _num(text: str) -> int | None:
     return int(digits) if digits else None
 
 
-def _new_item(category: str, name: str = "", price_asm: int = 0, from_price: bool = False) -> dict:
-    return {"category": category, "name": name, "qty": 1, "long_case": False, "assembly_price": 0, "parts": 1,
-            "price_asm": price_asm, "from_price": from_price}
+
+
+_PARTS_RE = [(re.compile(r"из\s+(двух|2)\b|2\s*-?х?\s*част", re.I), 2),
+             (re.compile(r"из\s+(тр[её]х|3)\b|3\s*-?х?\s*част", re.I), 3),
+             (re.compile(r"из\s+(четыр\w*|4)\b|4\s*-?х?\s*част", re.I), 4)]
+
+
+def _parts_from_title(title: str) -> int | None:
+    for rx, n in _PARTS_RE:
+        if rx.search(title or ""):
+            return n
+    return None
+
+
+def _new_item(category: str, name: str = "", price_asm: int = 0, from_price: bool = False,
+              dims: list | None = None) -> dict:
+    parts = _parts_from_title(name)
+    long_case = bool(dims) and category == "case" and max(dims[:2] or [0]) > 1000
+    return {"category": category, "name": name, "qty": 1, "long_case": long_case, "assembly_price": 0,
+            "parts": parts or 1, "parts_known": parts is not None or category != "big",
+            "price_asm": price_asm, "from_price": from_price, "dims_known": bool(dims)}
 
 
 def _new_quote() -> dict:
@@ -47,22 +73,21 @@ SOURCE_CATEGORY = {"Кресла": "armchair", "Диваны": "big", "Кров�
 
 
 def _item_queue(item: dict) -> list[str]:
-    cat = item["category"]
-    q = ["case_length"] if cat == "case" else []
-    if not item.get("from_price"):
-        q.append("name")
-    q.append("qty")
-    if cat == "big":
-        q.append("parts")
-    if item.get("from_price"):
-        if item.get("price_asm"):
-            q.append("assembly")  # стоимость из прайса — спрашиваем только «нужна / не нужна»
-    elif cat in ("armchair", "big"):
-        q.append("assembly")  # позиции нет в прайсе — выбор вручную
-    return q
+    """По позиции спрашиваем только количество (длину тумбы — если её нет в прайсе)."""
+    q = ["case_length"] if item["category"] == "case" and not item.get("dims_known") else []
+    return q + ["qty"]
 
 
-QUOTE_QUEUE = ["distance_km", "lift_mode", "time_slot", "carry_extra"]
+QUOTE_QUEUE = ["distance_km", "lift_mode", "time_slot", "carry_extra", "assembly"]
+
+
+def _parts_steps(q: dict) -> list[str]:
+    """Число частей нужно только для ручного подъёма/проноса и только если его нет в названии."""
+    return [f"parts:{i}" for i, it in enumerate(q["items"]) if not it.get("parts_known")]
+
+
+def _assembly_total(q: dict) -> int:
+    return sum(int(it.get("price_asm") or 0) * it["qty"] for it in q["items"])
 
 
 # --- вопросы по позиции --------------------------------------------------------------------
@@ -72,69 +97,45 @@ def _item_prompt(step: str, item: dict) -> tuple[str, list[tuple[str, str]], boo
     """(текст, кнопки, можно_текстом)"""
     if step == "case_length":
         return "📏 Длина изделия:", [("До 100 см", "len:short"), ("Более 100 см", "len:long")], False
-    if step == "name":
-        return (
-            f"✏ Название позиции (например «Диван Джун»). Можно пропустить — тогда будет "
-            f"«{dl.CATEGORY_LABEL[item['category']]}».",
-            [], True,
-        )
-    if step == "qty":
-        return "🔢 Количество, шт:", [(str(i), f"qty:{i}") for i in (1, 2, 3, 4, 5, 6)], True
-    if step == "parts":
-        return (f"🧩 Из скольких частей «{item['name'] or 'изделие'}»? (для ручного подъёма и проноса)",
-                [("1 — цельный", "parts:1"), ("2 части", "parts:2"), ("3 части", "parts:3"), ("4 части", "parts:4")],
-                True)
-    if item.get("from_price"):
-        return (f"🔧 Сборка по прайсу: <b>{rub(item['price_asm'])}</b> за шт. Нужна?",
-                [("✅ Со сборкой", "asm:yes"), ("❌ Без сборки", "asm:no")], False)
-    if item["category"] == "armchair":
-        return "🔧 Нужна сборка кресла?", [
-            (f"Со сборкой — {rub(dl.ASSEMBLY_ARMCHAIR)}", "asm:armchair"), ("Без сборки", "asm:none"),
-        ], False
-    return "🔧 Нужна сборка? Выберите позицию:", [
-        (f"Диван: только ножки — {rub(dl.ASSEMBLY_SOFA['legs'])}", "asm:sofa_legs"),
-        (f"Диван: полная сборка — {rub(dl.ASSEMBLY_SOFA['full'])}", "asm:sofa_full"),
-        (f"Кровать: обычная — {rub(dl.ASSEMBLY_BED['regular'])}", "asm:bed_regular"),
-        (f"Кровать Некст / Либерти / Бостон — {rub(dl.ASSEMBLY_BED['special'])}", "asm:bed_special"),
-        ("Матрас / без сборки", "asm:none"),
-    ], False
+    return f"🔢 «{item['name'] or 'Позиция'}» — сколько штук?", [(str(i), f"qty:{i}") for i in (1, 2, 3, 4)], True
 
 
 def _quote_prompt(step: str, q: dict) -> tuple[str, list[tuple[str, str]], bool]:
     if step == "distance_km":
         return (
-            "📍 На каком расстоянии от МКАД адрес доставки, км?\n"
-            f"Первые {dl.MKAD_FREE_KM} км за МКАД входят в стоимость, дальше +{dl.EXTRA_KM_PRICE} ₽/км.",
-            [("В пределах МКАД", "km:0"), ("20 км", "km:20"), ("30 км", "km:30"), ("50 км", "km:50"),
-             ("✏ Указать км", "km:ask")],
+            "📍 Расстояние от МКАД, км? (первые {0} км бесплатно, дальше +{1} ₽/км — можно написать число)".format(
+                dl.MKAD_FREE_KM, dl.EXTRA_KM_PRICE),
+            [("В пределах МКАД", "km:0"), ("20 км", "km:20"), ("30 км", "km:30"), ("50 км", "km:50")],
             True,
         )
     if step == "lift_mode":
-        cats = {it["category"] for it in q["items"]}
-        buttons = [("❌ Без подъёма (отказ / 1 этаж / грузовой лифт)", "lift:none")]
-        if cats - {"case"}:
-            buttons.append(("Занос и подъём на лифте", "lift:elevator"))
-            buttons.append(("Вручную, без лифта", "lift:manual"))
-        else:
-            buttons.append(("Подъём нужен (рассчитаем индивидуально)", "lift:elevator"))
-        return "🛗 Нужен подъём в квартиру? (один способ на весь заказ)", buttons, False
+        return "🛗 Подъём в квартиру:", [
+            ("❌ Не нужен", "lift:none"), ("🛗 На лифте", "lift:elevator"), ("🚶 Вручную, без лифта", "lift:manual"),
+        ], False
     if step == "floors":
-        return "На какой этаж поднимать (число этажей)?", [], True
+        return "Какой этаж? (напишите число)", [], True
     if step == "lift_difficulty":
         return (
-            "🧗 Сложность подъёма дивана/кровати (ставка за 1 часть за этаж):",
+            "🧗 Подъём дивана/кровати по лестнице:",
             [(f"{label[:1].upper() + label[1:]} — {dl.MANUAL_BIG_RATES[key]} ₽", f"diff:{key}")
              for key, label in dl.MANUAL_BIG_LABELS.items()],
             False,
         )
+    if step.startswith("parts:"):
+        it = q["items"][int(step.split(":")[1])]
+        return (f"🧩 «{it['name'] or 'Изделие'}» — из скольких частей?",
+                [("Цельный", "parts:1"), ("2 части", "parts:2"), ("3 части", "parts:3")], True)
     if step == "time_slot":
-        return f"⏰ Доставка ко времени (с 12:00)? +{rub(dl.TIME_SLOT_FEE)}", [
-            ("Да", "time:1"), ("Нет", "time:0"),
-        ], False
+        return f"⏰ Доставка ко времени (с 12:00, +{rub(dl.TIME_SLOT_FEE)})?", [("Нет", "time:0"), ("Да", "time:1")], False
+    if step == "assembly":
+        lines = [f"• {it['name']}" + (f" × {it['qty']}" if it["qty"] > 1 else "") + f" — {rub(it['price_asm'] * it['qty'])}"
+                 for it in q["items"] if it.get("price_asm")]
+        return ("🔧 Сборка по прайсу:\n" + "\n".join(lines) + f"\nИтого сборка: <b>{rub(_assembly_total(q))}</b>",
+                [("✅ Со сборкой", "asm:yes"), ("❌ Без сборки", "asm:no")], False)
     return (  # carry_extra
-        f"🚶 Нужен ручной пронос дальше {dl.CARRY_FREE_M} м (по территории дома/паркингу)?",
-        [("Нет", "carry:0"), ("Да — укажу метры", "carry:ask")],
-        False,
+        f"🚶 Ручной пронос дальше {dl.CARRY_FREE_M} м от машины? (можно написать метры)",
+        [("Нет", "carry:0"), ("30 м", "carry:30"), ("50 м", "carry:50"), ("100 м", "carry:100")],
+        True,
     )
 
 
@@ -158,11 +159,15 @@ async def _ask(target: types.Message, state: FSMContext) -> None:
             await _finish_quote(target, state)
         return
     step = queue[0]
+    if data["phase"] == "quote" and step == "assembly" and not _assembly_total(data["q"]):
+        await state.update_data(queue=queue[1:])  # сборки по прайсу нет — вопрос не задаём
+        await _ask(target, state)
+        return
     if data["phase"] == "item":
         text, buttons, allow_text = _item_prompt(step, data["item"])
     else:
         text, buttons, allow_text = _quote_prompt(step, data["q"])
-    await target.answer(text, reply_markup=_markup(buttons, skip=(step == "name")))
+    await target.answer(text, reply_markup=_markup(buttons))
 
 
 async def _finish_item(target: types.Message, state: FSMContext) -> None:
@@ -195,10 +200,16 @@ async def _start_item(target: types.Message, state: FSMContext) -> None:
     await state.update_data(phase="pick_category")
     n = len((await state.get_data())["q"]["items"]) + 1
     await target.answer(
-        f"Что везём? (позиция {n})\n✏ Напишите название из прайса, например <i>диван Джун</i> или "
-        "<i>кровать Либерти</i> — стоимость сборки подтяну из прайса.\nИли выберите тип вручную:",
-        reply_markup=_category_markup(),
+        f"✏ Что везём? (позиция {n}) Напишите модель, например <i>диван Джун</i> или <i>кровать Либерти</i> — "
+        "размеры и сборку найду в прайсе.",
+        reply_markup=kb_cancel(),
     )
+
+
+def kb_cancel() -> types.InlineKeyboardMarkup:
+    b = InlineKeyboardBuilder()
+    b.row(InlineKeyboardButton(text="✖ Отмена", callback_data="menu:home"))
+    return b.as_markup()
 
 
 def _quote_queue_after_lift(q: dict, queue: list[str]) -> list[str]:
@@ -207,7 +218,7 @@ def _quote_queue_after_lift(q: dict, queue: list[str]) -> list[str]:
     extra = ["floors"]
     if any(it["category"] == "big" for it in q["items"]):
         extra.append("lift_difficulty")
-    return extra + queue
+    return extra + _parts_steps(q) + queue
 
 
 def _item_fields(it: dict) -> dict:
@@ -300,6 +311,7 @@ async def cb_region_city_pick(call: types.CallbackQuery, state: FSMContext) -> N
 @router.callback_query(F.data == "menu:delivery")
 async def cb_delivery(call: types.CallbackQuery, state: FSMContext) -> None:
     await state.clear()
+    asyncio.create_task(_warm_price())  # прайс грузится заранее, пока менеджер выбирает город
     b = InlineKeyboardBuilder()
     b.row(InlineKeyboardButton(text="🏙 Москва", callback_data="deliv:city:msk"),
           InlineKeyboardButton(text="🏙 Санкт-Петербург", callback_data="deliv:city:spb"))
@@ -340,7 +352,7 @@ async def cb_category(call: types.CallbackQuery, state: FSMContext) -> None:
         await call.answer("Этот шаг уже пройден")
         return
     category = call.data.split(":")[2]
-    item = _new_item(category)
+    item = _new_item(category, data.get("last_query") or dl.CATEGORY_LABEL[category])
     await state.update_data(item=item, queue=_item_queue(item), phase="item")
     await call.answer()
     await _ask(call.message, state)
@@ -355,12 +367,23 @@ async def cb_pick(call: types.CallbackQuery, state: FSMContext) -> None:
         await call.answer("Этот шаг уже пройден")
         return
     await call.answer()
-    f = found[i]
-    item = _new_item(f["category"], f["title"], f["asm"], from_price=True)
+    await _select_found(call.message, state, found[i], edit=True)
+
+
+async def _select_found(target: types.Message, state: FSMContext, f: dict, edit: bool = False) -> None:
+    item = _new_item(f["category"], f["title"], f["asm"], from_price=True, dims=f.get("dims"))
     await state.update_data(item=item, queue=_item_queue(item), phase="item", found=None)
-    asm = f"сборка по прайсу {rub(f['asm'])}" if f["asm"] else "сборки в прайсе нет"
-    await call.message.answer(f"✔ <b>{f['title']}</b> — {asm}.")
-    await _ask(call.message, state)
+    size = f" {f['size']}" if f.get("size") else ""
+    asm = f"сборка {rub(f['asm'])}" if f["asm"] else "без сборки"
+    text = f"✔ <b>{f['title']}</b>{size} — {asm}."
+    if edit:
+        try:
+            await target.edit_text(text)
+        except Exception:
+            await target.answer(text)
+    else:
+        await target.answer(text)
+    await _ask(target, state)
 
 
 @router.callback_query(F.data.startswith("deliv:more:"))
@@ -394,25 +417,20 @@ async def cb_value(call: types.CallbackQuery, state: FSMContext) -> None:
             item["long_case"] = rest == "long"
         elif step == "qty":
             item["qty"] = int(rest)
-        elif step == "parts":
-            item["parts"] = int(rest)
-        elif step == "assembly":
-            if rest == "yes":
-                item["assembly_price"] = int(item.get("price_asm") or 0)
-            elif rest == "no":
-                item["assembly_price"] = 0
-            else:  # ручной выбор, позиции нет в прайсе
-                item["assembly_price"] = dl.ASSEMBLY_PRICE.get(rest, 0)
         await state.update_data(item=item, queue=queue[1:])
         await _ask(call.message, state)
         return
     # phase == quote
     q = data["q"]
     if step == "distance_km":
-        if rest == "ask":
-            await call.message.answer("Напишите расстояние от МКАД, км:")
-            return
         q["distance_km"] = int(rest)
+        queue = queue[1:]
+    elif step.startswith("parts:"):
+        _set_parts(q, step, int(rest))
+        queue = queue[1:]
+    elif step == "assembly":
+        for it in q["items"]:
+            it["assembly_price"] = int(it.get("price_asm") or 0) if rest == "yes" else 0
         queue = queue[1:]
     elif step == "lift_mode":
         q["lift_mode"] = rest  # none | elevator | manual
@@ -426,26 +444,23 @@ async def cb_value(call: types.CallbackQuery, state: FSMContext) -> None:
         q["time_slot"] = rest == "1"
         queue = queue[1:]
     elif step == "carry_extra":
-        if rest == "ask":
-            await call.message.answer("Сколько метров нужно пронести (всего, включая первые 15 м бесплатно)?")
-            await state.update_data(queue=["carry_extra_m"] + queue[1:])
-            return
-        q["carry_extra_m"] = 0
-        queue = queue[1:]
+        queue = _after_carry(q, int(rest), queue[1:])
     await state.update_data(q=q, queue=queue)
     await _ask(call.message, state)
 
 
-@router.callback_query(F.data == "deliv:skip", DeliveryForm.run)
-async def cb_skip(call: types.CallbackQuery, state: FSMContext) -> None:
-    data = await state.get_data()
-    queue = data.get("queue") or []
-    if not queue or queue[0] != "name" or data["phase"] != "item":
-        await call.answer()
-        return
-    await call.answer("Пропущено")
-    await state.update_data(queue=queue[1:])
-    await _ask(call.message, state)
+def _set_parts(q: dict, step: str, n: int) -> None:
+    it = q["items"][int(step.split(":")[1])]
+    it["parts"], it["parts_known"] = max(n, 1), True
+
+
+def _after_carry(q: dict, meters: int, queue: list[str]) -> list[str]:
+    """Пронос считается за место — если он нужен, уточняем части у диванов/кроватей (если ещё не знаем)."""
+    q["carry_extra_m"] = meters
+    if meters > dl.CARRY_FREE_M:
+        pending = [s for s in _parts_steps(q) if s not in queue]
+        return pending + queue
+    return queue
 
 
 async def _search_item(message: types.Message, state: FSMContext, query: str) -> None:
@@ -457,22 +472,29 @@ async def _search_item(message: types.Message, state: FSMContext, query: str) ->
         return
     found = [
         {"title": it.title, "category": SOURCE_CATEGORY.get(it.source, "big"), "asm": int(it.assembly or 0),
-         "size": "x".join(str(v) for v in it.dims) if it.dims else it.size_raw}
+         "size": "x".join(str(v) for v in it.dims) if it.dims else it.size_raw,
+         "dims": list(it.dims) if it.dims else None}
         for it in items
     ]
+    await state.update_data(last_query=query)
     if not found:
-        await status.edit_text(f"«{query}» в прайсе не нашёл. Напишите иначе или выберите тип вручную:",
+        await status.edit_text(f"«{query}» в прайсе не нашёл. Напишите иначе или выберите тип:",
                                reply_markup=_category_markup())
         return
+    if len(found) == 1:  # единственный вариант — выбираем сами, без лишней кнопки
+        await _select_found(status, state, found[0], edit=True)
+        return
     await state.update_data(found=found)
+    same_title = len({f["title"] for f in found}) == 1
     b = InlineKeyboardBuilder()
     for i, f in enumerate(found):
         asm = f" · сборка {rub(f['asm'])}" if f["asm"] else ""
-        size = f" {f['size']}" if f.get("size") else ""
-        b.row(InlineKeyboardButton(text=f"{f['title']}{size}{asm}"[:64], callback_data=f"deliv:pick:{i}"))
-    b.row(InlineKeyboardButton(text="📦 Нет в списке — выбрать тип вручную", callback_data="deliv:manual"))
-    b.row(InlineKeyboardButton(text="✖ Отмена", callback_data="menu:home"))
-    await status.edit_text("Выберите позицию:", reply_markup=b.as_markup())
+        label = (f["size"] or f["title"]) if same_title else f"{f['title']} {f['size'] or ''}".strip()
+        b.row(InlineKeyboardButton(text=f"{label}{asm}"[:64], callback_data=f"deliv:pick:{i}"))
+    b.row(InlineKeyboardButton(text="📦 Нет в списке", callback_data="deliv:manual"),
+          InlineKeyboardButton(text="✖ Отмена", callback_data="menu:home"))
+    head = f"<b>{found[0]['title']}</b> — выберите размер:" if same_title else "Выберите модель и размер:"
+    await status.edit_text(head, reply_markup=b.as_markup())
 
 
 @router.callback_query(F.data == "deliv:manual", DeliveryForm.run)
@@ -537,21 +559,9 @@ async def msg_value(message: types.Message, state: FSMContext) -> None:
     if not queue:
         return
     step = queue[0]
-    if data["phase"] == "item" and step == "name":
-        item = data["item"]
-        item["name"] = message.text.strip()
-        await state.update_data(item=item, queue=queue[1:])
-        await _ask(message, state)
-        return
     n = _num(message.text)
     if n is None or n < 0:
         await message.answer("Введите число, например 25.")
-        return
-    if data["phase"] == "item" and step == "parts":
-        item = data["item"]
-        item["parts"] = max(n, 1)
-        await state.update_data(item=item, queue=queue[1:])
-        await _ask(message, state)
         return
     if data["phase"] == "item" and step == "qty":
         if n < 1:
@@ -562,21 +572,22 @@ async def msg_value(message: types.Message, state: FSMContext) -> None:
         await state.update_data(item=item, queue=queue[1:])
         await _ask(message, state)
         return
-    if data["phase"] == "quote" and step == "distance_km":
-        q = data["q"]
+    if data["phase"] != "quote":
+        return
+    q = data["q"]
+    if step == "distance_km":
         q["distance_km"] = n
-        await state.update_data(q=q, queue=queue[1:])
-        await _ask(message, state)
-        return
-    if data["phase"] == "quote" and step == "floors":
-        q = data["q"]
+        queue = queue[1:]
+    elif step == "floors":
         q["floors"] = n
-        await state.update_data(q=q, queue=queue[1:])
-        await _ask(message, state)
+        queue = queue[1:]
+    elif step.startswith("parts:"):
+        _set_parts(q, step, n)
+        queue = queue[1:]
+    elif step == "carry_extra":
+        queue = _after_carry(q, n, queue[1:])
+    else:
+        await message.answer("Выберите вариант кнопкой выше 👆")
         return
-    if data["phase"] == "quote" and step == "carry_extra_m":
-        q = data["q"]
-        q["carry_extra_m"] = n
-        await state.update_data(q=q, queue=queue[1:])
-        await _ask(message, state)
-        return
+    await state.update_data(q=q, queue=queue)
+    await _ask(message, state)
