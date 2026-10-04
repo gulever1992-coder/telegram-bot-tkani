@@ -354,7 +354,13 @@ def _amount(text: str) -> float | None:
 
 async def _ask(target: types.Message, state: FSMContext, new_state, question: str, markup=None) -> None:
     await state.set_state(new_state)
+    if markup is None and str(new_state) in PAY_SKIPPABLE:
+        markup = _skip_keyboard()
     await target.answer(question, reply_markup=markup or kb.cancel_keyboard())
+
+
+def _skip_keyboard():
+    return kb.choice_keyboard("⏭ Пропустить", "pay:skip")
 
 
 @router.callback_query(F.data == "menu:payment")
@@ -383,21 +389,6 @@ async def pay_type_legal(call: types.CallbackQuery, state: FSMContext) -> None:
     await call.answer()
 
 
-@router.callback_query(F.data == "pay:skip", PaymentForm.phone)
-async def pay_phone_skip(call: types.CallbackQuery, state: FSMContext) -> None:
-    await state.update_data(phone="-")
-    await call.answer()
-    await _ask(call.message, state, PaymentForm.email, "10. Email дизайнера:", kb.choice_keyboard("⏭ Пропустить", "pay:skip"))
-
-
-@router.callback_query(F.data == "pay:skip", PaymentForm.email)
-async def pay_email_skip(call: types.CallbackQuery, state: FSMContext) -> None:
-    await state.update_data(email="-")
-    await call.answer()
-    await _ask(
-        call.message, state, PaymentForm.order_name,
-        "11. Название заказа / клиента (например: ИП Иванов Иван Иванович ИИИ-01):",
-    )
 
 
 @router.message(PaymentForm.agent_name, F.text)
@@ -632,11 +623,35 @@ async def pay_type_person(call: types.CallbackQuery, state: FSMContext) -> None:
     await call.answer()
 
 
-@router.callback_query(F.data == "pay:skip", PersonPayForm.order_name)
-async def person_order_skip(call: types.CallbackQuery, state: FSMContext) -> None:
-    await state.update_data(order_name="-")
+# «Пропустить»: поле -> "-", переход к следующему шагу. Ключи — состояния (юр. и физ. лицо).
+PAY_SKIP_NEXT = {
+    PaymentForm.inn: ("inn", PaymentForm.ogrnip, "3. ОГРНИП / ОГРН (если нет — нажмите «Нет»):", kb.choice_keyboard("Нет", "pay:none")),
+    PaymentForm.address: ("address", PaymentForm.rs, "5. Расчётный счёт (Р/с, 20 цифр):", None),
+    PaymentForm.rs: ("rs", PaymentForm.bank, "6. Название банка (например: Филиал № 7701 Банка ВТБ (ПАО) в г. Москве):", None),
+    PaymentForm.bank: ("bank", PaymentForm.ks, "7. Корреспондентский счёт (К/с, 20 цифр):", None),
+    PaymentForm.ks: ("ks", PaymentForm.bik, "8. БИК банка (9 цифр):", None),
+    PaymentForm.bik: ("bik", PaymentForm.phone, "9. Телефон дизайнера:", None),
+    PaymentForm.phone: ("phone", PaymentForm.email, "10. Email дизайнера:", None),
+    PaymentForm.email: ("email", PaymentForm.order_name,
+                        "11. Название заказа / клиента (например: ИП Иванов Иван Иванович ИИИ-01):", None),
+    PaymentForm.order_name: ("order_name", PaymentForm.sale_amount, "12. Сумма заказа (стоимость товара), руб.:", None),
+    PersonPayForm.order_name: ("order_name", PersonPayForm.designer, "2. ФИО дизайнера (полностью):", None),
+    PersonPayForm.bank: ("bank", PersonPayForm.amount, "4. Сумма заказа, руб.:", None),
+}
+PAY_SKIPPABLE = {str(state) for state in PAY_SKIP_NEXT}
+
+
+@router.callback_query(F.data == "pay:skip")
+async def pay_skip(call: types.CallbackQuery, state: FSMContext) -> None:
+    current = await state.get_state()
+    step = next((v for k, v in PAY_SKIP_NEXT.items() if str(k) == current), None)
+    if step is None:
+        await call.answer()
+        return
+    field, next_state, question, markup = step
+    await state.update_data({field: "-"})
     await call.answer()
-    await _ask(call.message, state, PersonPayForm.designer, "2. ФИО дизайнера (полностью):")
+    await _ask(call.message, state, next_state, question, markup)
 
 
 @router.message(PersonPayForm.order_name, F.text)
@@ -652,13 +667,6 @@ async def person_designer(message: types.Message, state: FSMContext) -> None:
         message, state, PersonPayForm.bank, "3. Банк получателя (например: Сбербанк):",
         kb.choice_keyboard("⏭ Пропустить", "pay:skip"),
     )
-
-
-@router.callback_query(F.data == "pay:skip", PersonPayForm.bank)
-async def person_bank_skip(call: types.CallbackQuery, state: FSMContext) -> None:
-    await state.update_data(bank="-")
-    await call.answer()
-    await _ask(call.message, state, PersonPayForm.amount, "4. Сумма заказа, руб.:")
 
 
 @router.message(PersonPayForm.bank, F.text)
