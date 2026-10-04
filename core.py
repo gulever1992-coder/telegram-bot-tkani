@@ -360,15 +360,44 @@ async def _ask(target: types.Message, state: FSMContext, new_state, question: st
 @router.callback_query(F.data == "menu:payment")
 async def cb_payment(call: types.CallbackQuery, state: FSMContext) -> None:
     await state.clear()
+    markup = types.InlineKeyboardMarkup(inline_keyboard=[
+        [types.InlineKeyboardButton(text="🏢 Юр. лицо — выплата по счёту", callback_data="pay:type:legal")],
+        [types.InlineKeyboardButton(text="👤 Физ. лицо — перевод на карту", callback_data="pay:type:person")],
+        [types.InlineKeyboardButton(text="🏠 В главное меню", callback_data="menu:home")],
+    ])
+    await show(call.message, "💵 <b>Выплата дизайнеру</b>\nВыберите тип дизайнера:", reply_markup=markup)
+    await call.answer()
+
+
+@router.callback_query(F.data == "pay:type:legal")
+async def pay_type_legal(call: types.CallbackQuery, state: FSMContext) -> None:
+    await state.clear()
     await state.set_state(PaymentForm.agent_name)
-    await show(call.message, 
-        "💵 <b>Выплата дизайнеру</b>\n"
+    await show(call.message,
+        "💵 <b>Выплата по счёту (юр. лицо)</b>\n"
         "Отвечайте на вопросы по очереди, в конце пришлю готовый пакет документов "
         "(договор, отчёт, счёт, акт).\n\n"
         "1. ФИО дизайнера (полностью):",
         reply_markup=kb.cancel_keyboard(),
     )
     await call.answer()
+
+
+@router.callback_query(F.data == "pay:skip", PaymentForm.phone)
+async def pay_phone_skip(call: types.CallbackQuery, state: FSMContext) -> None:
+    await state.update_data(phone="-")
+    await call.answer()
+    await _ask(call.message, state, PaymentForm.email, "10. Email дизайнера:", kb.choice_keyboard("⏭ Пропустить", "pay:skip"))
+
+
+@router.callback_query(F.data == "pay:skip", PaymentForm.email)
+async def pay_email_skip(call: types.CallbackQuery, state: FSMContext) -> None:
+    await state.update_data(email="-")
+    await call.answer()
+    await _ask(
+        call.message, state, PaymentForm.order_name,
+        "11. Название заказа / клиента (например: ИП Иванов Иван Иванович ИИИ-01):",
+    )
 
 
 @router.message(PaymentForm.agent_name, F.text)
@@ -442,19 +471,19 @@ async def pay_bik(message: types.Message, state: FSMContext) -> None:
         await message.answer("БИК — только цифры, ровно 9 штук (например 044525000). Введите ещё раз или нажмите «Отмена»:", reply_markup=kb.cancel_keyboard())
         return
     await state.update_data(bik=bik)
-    await _ask(message, state, PaymentForm.phone, "9. Телефон дизайнера:")
+    await _ask(message, state, PaymentForm.phone, "9. Телефон дизайнера:", kb.choice_keyboard("⏭ Пропустить", "pay:skip"))
 
 
 @router.message(PaymentForm.phone, F.text)
 async def pay_phone(message: types.Message, state: FSMContext) -> None:
     await state.update_data(phone=message.text.strip())
-    await _ask(message, state, PaymentForm.email, "10. Email дизайнера:")
+    await _ask(message, state, PaymentForm.email, "10. Email дизайнера:", kb.choice_keyboard("⏭ Пропустить", "pay:skip"))
 
 
 @router.message(PaymentForm.email, F.text)
 async def pay_email(message: types.Message, state: FSMContext) -> None:
     if "@" not in message.text:
-        await message.answer("Похоже, это не email. Введите ещё раз:", reply_markup=kb.cancel_keyboard())
+        await message.answer("Похоже, это не email. Введите ещё раз:", reply_markup=kb.choice_keyboard("⏭ Пропустить", "pay:skip"))
         return
     await state.update_data(email=message.text.strip())
     await _ask(
@@ -563,6 +592,112 @@ async def pay_date(message: types.Message, state: FSMContext) -> None:
         await message.answer("Формат даты — ДД.ММ.ГГГГ, например 20.09.2026. Ещё раз:", reply_markup=kb.cancel_keyboard())
         return
     await _finish(message, state, date)
+
+
+# --- Выплата физ. лицу: перевод на карту, расчёт с налогом 13% за вывод -----
+
+
+class PersonPayForm(StatesGroup):
+    order_name = State()
+    designer = State()
+    bank = State()
+    amount = State()
+    discount = State()
+
+
+PERSON_TAX = 0.13  # налог за вывод денег физ. лица
+
+
+def _money(value: float) -> str:
+    text = f"{value:,.2f}".replace(",", " ").replace(".", ",")
+    return text[:-3] if text.endswith(",00") else text
+
+
+def person_payout(amount: float, discount: float) -> tuple[float, float, float]:
+    """Вознаграждение дизайнера = сумма заказа × его процент; возвращает (процент, налог, к выплате)."""
+    reward = amount * discount / 100
+    tax = reward * PERSON_TAX
+    return reward, tax, reward - tax
+
+
+@router.callback_query(F.data == "pay:type:person")
+async def pay_type_person(call: types.CallbackQuery, state: FSMContext) -> None:
+    await state.clear()
+    await state.set_state(PersonPayForm.order_name)
+    await show(call.message,
+        "👤 <b>Перевод на карту (физ. лицо)</b>\n\n"
+        "1. ФИО клиента или название заказа:",
+        reply_markup=kb.choice_keyboard("⏭ Пропустить", "pay:skip"),
+    )
+    await call.answer()
+
+
+@router.callback_query(F.data == "pay:skip", PersonPayForm.order_name)
+async def person_order_skip(call: types.CallbackQuery, state: FSMContext) -> None:
+    await state.update_data(order_name="-")
+    await call.answer()
+    await _ask(call.message, state, PersonPayForm.designer, "2. ФИО дизайнера (полностью):")
+
+
+@router.message(PersonPayForm.order_name, F.text)
+async def person_order(message: types.Message, state: FSMContext) -> None:
+    await state.update_data(order_name=message.text.strip())
+    await _ask(message, state, PersonPayForm.designer, "2. ФИО дизайнера (полностью):")
+
+
+@router.message(PersonPayForm.designer, F.text)
+async def person_designer(message: types.Message, state: FSMContext) -> None:
+    await state.update_data(designer=message.text.strip())
+    await _ask(
+        message, state, PersonPayForm.bank, "3. Банк получателя (например: Сбербанк):",
+        kb.choice_keyboard("⏭ Пропустить", "pay:skip"),
+    )
+
+
+@router.callback_query(F.data == "pay:skip", PersonPayForm.bank)
+async def person_bank_skip(call: types.CallbackQuery, state: FSMContext) -> None:
+    await state.update_data(bank="-")
+    await call.answer()
+    await _ask(call.message, state, PersonPayForm.amount, "4. Сумма заказа, руб.:")
+
+
+@router.message(PersonPayForm.bank, F.text)
+async def person_bank(message: types.Message, state: FSMContext) -> None:
+    await state.update_data(bank=message.text.strip())
+    await _ask(message, state, PersonPayForm.amount, "4. Сумма заказа, руб.:")
+
+
+@router.message(PersonPayForm.amount, F.text)
+async def person_amount(message: types.Message, state: FSMContext) -> None:
+    value = _amount(message.text)
+    if value is None:
+        await message.answer("Введите сумму числом, например 111868. Ещё раз:", reply_markup=kb.cancel_keyboard())
+        return
+    await state.update_data(amount=value)
+    await _ask(message, state, PersonPayForm.discount, "5. Процент дизайнера (скидка), %:")
+
+
+@router.message(PersonPayForm.discount, F.text)
+async def person_discount(message: types.Message, state: FSMContext) -> None:
+    value = _amount(message.text.strip().replace("%", "").replace(",", "."))
+    if value is None or value > 100:
+        await message.answer("Введите процент числом от 1 до 100, например 15. Ещё раз:", reply_markup=kb.cancel_keyboard())
+        return
+    d = await state.get_data()
+    reward, tax, payout = person_payout(d["amount"], value)
+    await state.clear()
+    analytics.track(message.chat.id, "payout", d["designer"])
+    await message.answer(
+        "✅ <b>Расчёт выплаты (физ. лицо)</b>\n\n"
+        f"Заказ / клиент: {d['order_name']}\n"
+        f"Дизайнер: {d['designer']}\n"
+        f"Банк получателя: {d['bank']}\n"
+        f"Сумма заказа: {_money(d['amount'])} ₽\n\n"
+        f"Процент дизайнера: {_money(value)} %\n"
+        f"Вознаграждение: {_money(reward)} ₽\n"
+        f"Налог за вывод (13%): −{_money(tax)} ₽\n"
+        f"<b>К переводу на карту: {_money(payout)} ₽</b>",
+    )
 
 
 # --- Поиск ткани: фабрика -> ткань -> цена, категория, цвета в наличии ------

@@ -96,7 +96,6 @@ ASSEMBLY_PRICE = {
     "armchair": ASSEMBLY_ARMCHAIR, "sofa_legs": ASSEMBLY_SOFA["legs"], "sofa_full": ASSEMBLY_SOFA["full"],
     "bed_regular": ASSEMBLY_BED["regular"], "bed_special": ASSEMBLY_BED["special"],
 }
-CALLOUT_FEE = 3000  # выезд на сборку — один раз на весь заказ, если есть хоть одна сборка
 
 TIME_SLOT_FEE = 2000
 CARRY_EXTRA_UNIT_M = 10
@@ -136,7 +135,6 @@ class Quote:
 
     def compute(self) -> int:
         self.lines = []
-        any_assembly = False
         for it in self.items:
             base = delivery_price(it.category, it.qty, it.long_case)
             self.lines.append((f"Доставка: {it.label} × {it.qty}", base))
@@ -156,15 +154,12 @@ class Quote:
 
             assembly_price = ASSEMBLY_PRICE.get(it.assembly)
             if assembly_price:
-                any_assembly = True
-                mult = it.qty if it.assembly == "armchair" else 1
-                self.lines.append((f"Сборка: {it.label}" + (f" × {it.qty}" if mult > 1 else ""), assembly_price * mult))
+                # сборка — по цене из прайса за каждую единицу позиции
+                self.lines.append((f"Сборка: {it.label}" + (f" × {it.qty}" if it.qty > 1 else ""), assembly_price * it.qty))
 
         km = extra_km_cost(self.distance_km)
         if km:
             self.lines.append((f"Свыше {MKAD_FREE_KM} км от МКАД ({self.distance_km} км)", km))
-        if any_assembly:
-            self.lines.append(("Выезд на сборку", CALLOUT_FEE))
         if self.time_slot:
             self.lines.append(("Доставка ко времени", TIME_SLOT_FEE))
         carry = carry_extra_cost(self.carry_extra_m)
