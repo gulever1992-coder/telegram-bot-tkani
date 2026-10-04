@@ -87,7 +87,28 @@ def lift_cost_manual(category: str, floors: int, qty: int) -> int | None:
     return t["manual_per_floor"] * max(floors, 0) * qty
 
 
-# --- сборка --------------------------------------------------------------------------------
+# --- ручной подъём по правилам логиста --------------------------------------------------------
+# диван/кровать: за каждую часть за этаж, ставка зависит от сложности; кресло: 500 ₽ за шт за этаж
+
+MANUAL_BIG_RATES = {"normal": 600, "hard": 700, "very_hard": 800}
+MANUAL_BIG_LABELS = {
+    "normal": "обычный",
+    "hard": "сложный (пронос через этаж до следующего пролёта)",
+    "very_hard": "очень сложный (узкая лестница)",
+}
+MANUAL_ARMCHAIR = 500
+
+
+def lift_cost_manual_item(it: "Item", floors: int, difficulty: str = "normal") -> int | None:
+    floors = max(floors, 0)
+    if it.category == "big":
+        return MANUAL_BIG_RATES.get(difficulty, 600) * max(it.parts, 1) * it.qty * floors
+    if it.category == "armchair":
+        return MANUAL_ARMCHAIR * it.qty * floors
+    return lift_cost_manual(it.category, floors, it.qty)
+
+
+# --- сборка: стоимость берётся из прайса по позиции; эти цены — только если позиции нет в прайсе ---
 
 ASSEMBLY_ARMCHAIR = 1250
 ASSEMBLY_SOFA = {"legs": 1300, "full": 2700}
@@ -101,13 +122,13 @@ TIME_SLOT_FEE = 2000
 CARRY_EXTRA_UNIT_M = 10
 CARRY_EXTRA_PRICE = 200
 CARRY_FREE_M = 15
+SAME_CAR_UNIT = 500  # догруз в ту же машину к основной доставке, за 1 шт
 
 
-def carry_extra_cost(meters: int) -> int:
+def carry_extra_cost(meters: int, pieces: int = 1) -> int:
+    """200 ₽ за каждые 10 м сверх 15 м (пропорционально: 35 м = 700 ₽) — за каждое место."""
     extra = max(0, meters - CARRY_FREE_M)
-    if not extra:
-        return 0
-    return math.ceil(extra / CARRY_EXTRA_UNIT_M) * CARRY_EXTRA_PRICE
+    return round(extra * CARRY_EXTRA_PRICE / CARRY_EXTRA_UNIT_M) * max(pieces, 0)
 
 
 @dataclass
@@ -116,11 +137,43 @@ class Item:
     name: str = ""
     qty: int = 1
     long_case: bool = False
-    assembly: str = "none"  # none | armchair | sofa_legs | sofa_full | bed_regular | bed_special
+    assembly_price: int = 0  # сборка за 1 шт, 0 — без сборки
+    parts: int = 1  # из скольких частей диван/кровать (для подъёма и проноса)
 
     @property
     def label(self) -> str:
         return self.name.strip() or CATEGORY_LABEL.get(self.category, self.category)
+
+    @property
+    def pieces(self) -> int:
+        return self.qty * (max(self.parts, 1) if self.category == "big" else 1)
+
+
+def _names(items: list[Item]) -> str:
+    return ", ".join(f"{it.label} × {it.qty}" for it in items)
+
+
+def delivery_lines(items: list[Item]) -> list[tuple[str, int]]:
+    """Доставка одной машиной: основной тариф по самой крупной группе, остальное — догруз по 500 ₽/шт.
+    Пример: диван + кровать (крупногабарит, 2 шт) = 6800, + 2 кресла по 500 = 7800."""
+    big = [i for i in items if i.category == "big"]
+    seats = [i for i in items if i.category in ("armchair", "small")]
+    cases = [i for i in items if i.category == "case"]
+    qty = lambda group: sum(i.qty for i in group)
+    lines: list[tuple[str, int]] = []
+    if big:
+        lines.append((f"Доставка, крупногабарит {qty(big)} шт: {_names(big)}", delivery_price("big", qty(big))))
+        rest = seats + cases
+    elif seats:
+        lines.append((f"Доставка: {_names(seats)}", delivery_price("armchair", qty(seats))))
+        rest = cases
+    else:
+        for it in cases:
+            lines.append((f"Доставка: {it.label} × {it.qty}", delivery_price("case", it.qty, it.long_case)))
+        rest = []
+    if rest:
+        lines.append((f"Догруз в ту же машину: {_names(rest)} ({SAME_CAR_UNIT} ₽/шт)", SAME_CAR_UNIT * qty(rest)))
+    return lines
 
 
 @dataclass
@@ -129,16 +182,14 @@ class Quote:
     distance_km: int = 0
     lift_mode: str = "none"  # none | elevator | manual — один способ на весь заказ (один адрес, один заезд)
     floors: int = 0
+    lift_difficulty: str = "normal"
     time_slot: bool = False
     carry_extra_m: int = 0
     lines: list[tuple[str, int]] = field(default_factory=list)
 
     def compute(self) -> int:
-        self.lines = []
+        self.lines = delivery_lines(self.items)
         for it in self.items:
-            base = delivery_price(it.category, it.qty, it.long_case)
-            self.lines.append((f"Доставка: {it.label} × {it.qty}", base))
-
             if self.lift_mode == "elevator":
                 c = lift_cost_elevator(it.category, it.qty)
                 if c:
@@ -146,23 +197,29 @@ class Quote:
                 else:
                     self.lines.append((f"Подъём: {it.label} — индивидуально, уточните у логистики", 0))
             elif self.lift_mode == "manual":
-                c = lift_cost_manual(it.category, self.floors, it.qty)
+                c = lift_cost_manual_item(it, self.floors, self.lift_difficulty)
                 if c:
-                    self.lines.append((f"Ручной подъём, {self.floors} эт.: {it.label}", c))
+                    detail = ""
+                    if it.category == "big":
+                        rate = MANUAL_BIG_RATES.get(self.lift_difficulty, 600)
+                        detail = f" ({it.pieces} част. × {rate} ₽ × {self.floors} эт.)"
+                    elif it.category == "armchair":
+                        detail = f" ({it.qty} шт × {MANUAL_ARMCHAIR} ₽ × {self.floors} эт.)"
+                    self.lines.append((f"Ручной подъём: {it.label}{detail}", c))
                 else:
                     self.lines.append((f"Подъём: {it.label} — индивидуально, уточните у логистики", 0))
 
-            assembly_price = ASSEMBLY_PRICE.get(it.assembly)
-            if assembly_price:
-                # сборка — по цене из прайса за каждую единицу позиции
-                self.lines.append((f"Сборка: {it.label}" + (f" × {it.qty}" if it.qty > 1 else ""), assembly_price * it.qty))
+            if it.assembly_price:
+                self.lines.append((f"Сборка: {it.label}" + (f" × {it.qty}" if it.qty > 1 else ""),
+                                   it.assembly_price * it.qty))
 
         km = extra_km_cost(self.distance_km)
         if km:
             self.lines.append((f"Свыше {MKAD_FREE_KM} км от МКАД ({self.distance_km} км)", km))
         if self.time_slot:
             self.lines.append(("Доставка ко времени", TIME_SLOT_FEE))
-        carry = carry_extra_cost(self.carry_extra_m)
+        pieces = sum(it.pieces for it in self.items)
+        carry = carry_extra_cost(self.carry_extra_m, pieces)
         if carry:
-            self.lines.append((f"Ручной пронос свыше {CARRY_FREE_M} м ({self.carry_extra_m} м)", carry))
+            self.lines.append((f"Ручной пронос {self.carry_extra_m} м (сверх {CARRY_FREE_M} м), мест: {pieces}", carry))
         return sum(v for _, v in self.lines)

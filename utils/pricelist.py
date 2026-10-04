@@ -46,6 +46,7 @@ class Item:
     length: int | None = None
     article: str = ""
     price_from: float | None = None
+    assembly: float | None = None  # «Стоимость сборки» из листов «new», руб. за 1 шт
     extra: dict = field(default_factory=dict)
 
     @property
@@ -163,6 +164,7 @@ def _parse_new(rows: list[list[str]], source: str) -> list[Item]:
     opt_cols = [i for i, h in enumerate(header) if h.startswith("цена опт")]
     opt_2025 = next((i for i in opt_cols if "2025" in header[i]), opt_cols[-1] if opt_cols else None)
     cat4 = next((i for i, h in enumerate(header) if h.startswith("4 кат")), None)
+    asm_col = next((i for i, h in enumerate(header) if "сборк" in h), None)
 
     items = []
     for row in rows[header_idx + 1:]:
@@ -182,6 +184,7 @@ def _parse_new(rows: list[list[str]], source: str) -> list[Item]:
                 length=first_number(size_raw),
                 article=_cell(row, art_col).replace(".0", ""),
                 price_from=price,
+                assembly=to_number(_cell(row, asm_col)),
             )
         )
     return items
@@ -217,6 +220,19 @@ async def search(query: str) -> list[Item]:
         return found[:15]
     new_items = await _load_new_items()
     return [i for i in new_items if any(_matches(v, i.title) for v in variants)][:15]
+
+
+async def search_catalog(query: str) -> list[Item]:
+    """Поиск только по листам «new» (там есть стоимость сборки и понятен тип изделия по листу)."""
+    variants = [query]
+    alt = latin_to_cyrillic(query)
+    if alt != normalize(query):
+        variants.append(alt)
+    try:
+        new_items = await _load_new_items()
+    except PriceError:
+        new_items = await _load_new_items()  # одна повторная попытка: Google иногда не отвечает с первого раза
+    return [i for i in new_items if any(_matches(v, i.title) for v in variants)][:12]
 
 
 async def enrich(item: Item) -> Item:
