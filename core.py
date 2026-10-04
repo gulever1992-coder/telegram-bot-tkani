@@ -508,7 +508,11 @@ async def pay_reward(message: types.Message, state: FSMContext) -> None:
     await state.update_data(reward=value)
     await _ask(
         message, state, PaymentForm.tax, "14. Налогообложение, % (нажмите «20» или введите своё):",
-        kb.choice_keyboard("20", "pay:tax20"),
+        types.InlineKeyboardMarkup(inline_keyboard=[
+            [types.InlineKeyboardButton(text="20", callback_data="pay:tax20")],
+            [types.InlineKeyboardButton(text="⏭ Пропустить", callback_data="pay:skip")],
+            [types.InlineKeyboardButton(text="✖ Отмена", callback_data="menu:home")],
+        ]),
     )
 
 
@@ -635,10 +639,13 @@ PAY_SKIP_NEXT = {
     PaymentForm.email: ("email", PaymentForm.order_name,
                         "11. Название заказа / клиента (например: ИП Иванов Иван Иванович ИИИ-01):", None),
     PaymentForm.order_name: ("order_name", PaymentForm.sale_amount, "12. Сумма заказа (стоимость товара), руб.:", None),
+    PaymentForm.tax: ("tax", PaymentForm.date, "15. Дата документов (нажмите «Сегодня» или введите ДД.ММ.ГГГГ):",
+                      kb.choice_keyboard("📅 Сегодня", "pay:today")),
     PersonPayForm.order_name: ("order_name", PersonPayForm.designer, "2. ФИО дизайнера (полностью):", None),
     PersonPayForm.bank: ("bank", PersonPayForm.amount, "4. Сумма заказа, руб.:", None),
 }
 PAY_SKIPPABLE = {str(state) for state in PAY_SKIP_NEXT}
+PAY_SKIP_DEFAULT = {"tax": "20"}  # что сохраняется при пропуске; остальные поля — «-»
 
 
 @router.callback_query(F.data == "pay:skip")
@@ -649,7 +656,7 @@ async def pay_skip(call: types.CallbackQuery, state: FSMContext) -> None:
         await call.answer()
         return
     field, next_state, question, markup = step
-    await state.update_data({field: "-"})
+    await state.update_data({field: PAY_SKIP_DEFAULT.get(field, "-")})
     await call.answer()
     await _ask(call.message, state, next_state, question, markup)
 
