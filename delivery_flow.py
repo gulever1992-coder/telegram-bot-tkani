@@ -85,8 +85,8 @@ QUOTE_QUEUE = ["distance_km", "lift_mode", "time_slot", "carry_extra", "assembly
 
 
 def _parts_steps(q: dict) -> list[str]:
-    """Число частей нужно только для ручного подъёма/проноса и только если его нет в названии."""
-    return [f"parts:{i}" for i, it in enumerate(q["items"]) if not it.get("parts_known")]
+    """Число частей не спрашиваем: берём из названия («из двух частей»), иначе изделие цельное."""
+    return []
 
 
 def _assembly_total(q: dict) -> int:
