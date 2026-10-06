@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import datetime as dt
 import io
 import logging
@@ -244,6 +245,13 @@ async def _next(target: types.Message, state: FSMContext, uid: int) -> None:
         k["items"].append(c)
         await state.update_data(kp=k, cur=None, mode="more")
         await _more_menu(target, k)
+    elif mode == "itemedit":  # правка одной позиции — кладём её на прежнее место
+        i = data.get("edit_index", 0)
+        if 0 <= i < len(k["items"]):
+            k["items"][i] = c
+        await state.update_data(kp=k, cur=None)
+        await target.answer(f"✔ Позиция {i + 1} обновлена.")
+        await _preview(target, state)
     else:  # terms | edit
         await _preview(target, state)
 
@@ -337,6 +345,8 @@ async def _apply(target: types.Message, state: FSMContext, uid: int, value: str 
         if not n or n < 1 or n != int(n):
             return "Введите количество целым числом, например 2."
         c["qty"] = int(n)
+    elif base in ("size", "material", "link") and empty and data["mode"] == "itemedit":
+        pass  # «Пропустить» при правке позиции — оставляем прежнее значение
     elif base in ("size", "material", "link"):
         if value == "keep":
             value = default.get(base, "")
@@ -658,8 +668,8 @@ def _preview_markup() -> types.InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
     b.row(InlineKeyboardButton(text="📄 Получить PDF", callback_data="kp:make"))
     b.row(
+        InlineKeyboardButton(text="✏ Изменить позицию", callback_data="kp:items"),
         InlineKeyboardButton(text="➕ Позиция", callback_data="kp:addmore"),
-        InlineKeyboardButton(text="🗑 Удалить последнюю", callback_data="kp:dellast"),
     )
     b.row(
         InlineKeyboardButton(text="✏ Заказчик / менеджер", callback_data="kp:editcust"),
@@ -704,6 +714,111 @@ async def cb_dellast(call: types.CallbackQuery, state: FSMContext) -> None:
         k["items"].pop()
     await state.update_data(kp=k)
     await call.answer("Удалено")
+    await _preview(call.message, state)
+
+
+# --- правка отдельной позиции ---------------------------------------------------------
+
+# (подпись кнопки, шаги опроса) — что можно поменять в позиции, не пересоздавая КП
+ITEM_FIELDS = [
+    ("Количество", ["qty"]), ("Цена", ["price"]), ("Скидка", ["discount"]),
+    ("Размеры", ["size"]), ("Материал / ткань", ["material"]), ("Ссылка", ["link"]),
+    ("Фото", ["photo"]), ("Название", ["title"]),
+]
+ALT_FIELDS = [
+    ("Альтернатива: цена", ["alt_price"]), ("Альтернатива: материал", ["alt_material"]),
+    ("Альтернатива: размеры", ["alt_size"]), ("Альтернатива: фото", ["alt_photo"]),
+]
+
+
+def _item_line(n: int, it: dict) -> str:
+    return f"{n}. {it['title'] or 'Без названия'} — {it['qty']} шт × {rub(it.get('unit_price') or 0)}"
+
+
+@router.callback_query(F.data == "kp:items", KPForm.run)
+async def cb_items(call: types.CallbackQuery, state: FSMContext) -> None:
+    k = (await state.get_data())["kp"]
+    await call.answer()
+    if not k["items"]:
+        await call.message.answer("Позиций пока нет.")
+        return
+    b = InlineKeyboardBuilder()
+    for i, it in enumerate(k["items"]):
+        b.row(InlineKeyboardButton(text=f"✏ {i + 1}. {(it['title'] or 'Без названия')[:40]}", callback_data=f"kp:it:{i}"),
+              InlineKeyboardButton(text="🗑", callback_data=f"kp:itdel:{i}"))
+    b.row(InlineKeyboardButton(text="⬅ Назад к КП", callback_data="kp:back"))
+    await call.message.answer("Какую позицию изменить?\n\n" + "\n".join(
+        _item_line(i + 1, it) for i, it in enumerate(k["items"])), reply_markup=b.as_markup())
+
+
+@router.callback_query(F.data.startswith("kp:it:"), KPForm.run)
+async def cb_item(call: types.CallbackQuery, state: FSMContext) -> None:
+    k = (await state.get_data())["kp"]
+    i = int(call.data.split(":")[2])
+    if i >= len(k["items"]):
+        await call.answer("Список устарел", show_alert=True)
+        return
+    await call.answer()
+    it = k["items"][i]
+    fields = ITEM_FIELDS + (ALT_FIELDS if it.get("alt") else [])
+    b = InlineKeyboardBuilder()
+    for j, (label, _) in enumerate(fields):
+        b.button(text=label, callback_data=f"kp:itf:{i}:{j}")
+    b.adjust(2)
+    b.row(InlineKeyboardButton(text="🔄 Заполнить позицию заново", callback_data=f"kp:itnew:{i}"))
+    b.row(InlineKeyboardButton(text="🗑 Удалить позицию", callback_data=f"kp:itdel:{i}"))
+    b.row(InlineKeyboardButton(text="⬅ Назад к КП", callback_data="kp:back"))
+    await call.message.answer(
+        f"✏ <b>Позиция {i + 1}</b>\n{_item_line(i + 1, it)}"
+        + (f"\nРазмеры: {it['size']}" if it.get("size") else "")
+        + (f"\nМатериал: {it['material']}" if it.get("material") else "")
+        + (f"\nСкидка: {it['discount']:g}%" if it.get("discount") else "")
+        + "\n\nЧто изменить?",
+        reply_markup=b.as_markup(),
+    )
+
+
+async def _edit_item(call: types.CallbackQuery, state: FSMContext, i: int, queue: list[str], fresh: bool) -> None:
+    k = (await state.get_data())["kp"]
+    if i >= len(k["items"]):
+        await call.answer("Список устарел", show_alert=True)
+        return
+    await call.answer()
+    cur = _item_new() if fresh else copy.deepcopy(k["items"][i])
+    await state.update_data(mode="itemedit", edit_index=i, cur=cur, queue=queue)
+    await _next(call.message, state, call.from_user.id)
+
+
+@router.callback_query(F.data.startswith("kp:itf:"), KPForm.run)
+async def cb_item_field(call: types.CallbackQuery, state: FSMContext) -> None:
+    _, _, i, j = call.data.split(":")
+    i, j = int(i), int(j)
+    k = (await state.get_data())["kp"]
+    fields = ITEM_FIELDS + (ALT_FIELDS if i < len(k["items"]) and k["items"][i].get("alt") else [])
+    if j >= len(fields):
+        await call.answer("Список устарел", show_alert=True)
+        return
+    await _edit_item(call, state, i, list(fields[j][1]), fresh=False)
+
+
+@router.callback_query(F.data.startswith("kp:itnew:"), KPForm.run)
+async def cb_item_new(call: types.CallbackQuery, state: FSMContext) -> None:
+    k = (await state.get_data())["kp"]
+    queue = list(ITEM_VIS if k["kind"] == "vis" else ITEM_STD)
+    await _edit_item(call, state, int(call.data.split(":")[2]), queue, fresh=True)
+
+
+@router.callback_query(F.data.startswith("kp:itdel:"), KPForm.run)
+async def cb_item_del(call: types.CallbackQuery, state: FSMContext) -> None:
+    data = await state.get_data()
+    k = data["kp"]
+    i = int(call.data.split(":")[2])
+    if i >= len(k["items"]):
+        await call.answer("Список устарел", show_alert=True)
+        return
+    k["items"].pop(i)
+    await state.update_data(kp=k)
+    await call.answer(f"Позиция {i + 1} удалена")
     await _preview(call.message, state)
 
 

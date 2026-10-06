@@ -105,8 +105,6 @@ def _ask_markup(field: str, buttons: list[tuple[str, str]]) -> types.InlineKeybo
     b = InlineKeyboardBuilder()
     for label, value in buttons:
         b.row(InlineKeyboardButton(text=label, callback_data=f"pipe:v:{value}"))
-    if field not in REQUIRED:
-        b.row(InlineKeyboardButton(text="⏭ Пропустить", callback_data="pipe:skip"))
     b.row(InlineKeyboardButton(text="✖ Отмена", callback_data="pipe:cancel"))
     return b.as_markup()
 
