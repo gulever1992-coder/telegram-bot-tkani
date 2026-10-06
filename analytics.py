@@ -107,6 +107,13 @@ async def _after(event: dict, document: tuple[bytes, str] | None, caption: str) 
     _persist_soon()
 
 
+def who(uid: int) -> str:
+    """Строка «кто сделал» для сообщений владельцу: менеджер и шоу-рум."""
+    prof = profiles.get(uid) or {}
+    showroom = profiles.norm_showroom(prof.get("showroom", ""))
+    return f"👤 Менеджер: {prof.get('name') or '—'}" + (f" · {showroom}" if showroom else "")
+
+
 def notify(text: str) -> None:
     """Отправляет владельцу обычное сообщение (не документ), при необходимости — несколькими частями."""
     if not enabled():

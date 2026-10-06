@@ -41,6 +41,7 @@ async def cb_card(call: types.CallbackQuery) -> None:
     await call.answer("Готовлю карточку…")
     doc = await asyncio.to_thread(cards.build_card_docx, card)
     analytics.track(call.message.chat.id, "card", card["short"])
+    analytics.notify(f"🏢 Запрошена карточка организации: {card['short']}\n{analytics.who(call.message.chat.id)}")
     b = InlineKeyboardBuilder()
     b.row(InlineKeyboardButton(text="🏢 Другая организация", callback_data="menu:cards"))
     b.row(InlineKeyboardButton(text="🏠 В главное меню", callback_data="menu:home"))

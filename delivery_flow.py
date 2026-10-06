@@ -244,6 +244,7 @@ async def _finish_quote(target: types.Message, state: FSMContext) -> None:
     text = "\n".join(lines)
     analytics.track(target.chat.id, "delivery", data["city"],
                     data={"sum": total, "items": len(quote.items)})
+    analytics.notify(f"{text}\n\n{analytics.who(target.chat.id)}")
     b = InlineKeyboardBuilder()
     b.row(InlineKeyboardButton(text="🔁 Новый расчёт", callback_data="menu:delivery"))
     b.row(InlineKeyboardButton(text="🏠 В главное меню", callback_data="menu:home"))
@@ -564,6 +565,7 @@ async def msg_value(message: types.Message, state: FSMContext) -> None:
             return
         text = _region_result(entry, items)
         analytics.track(message.chat.id, "delivery", entry["city"], data={"region": entry["city"], "items": len(items)})
+        analytics.notify(f"🚚 <b>Доставка в регион</b>\n{analytics.who(message.chat.id)}\n\n{text}")
         await state.clear()
         await message.answer(text, reply_markup=_region_result_markup())
         return

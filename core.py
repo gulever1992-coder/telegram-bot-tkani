@@ -564,8 +564,8 @@ async def _finish(target: types.Message, state: FSMContext, date: dt.date) -> No
         target.chat.id, "payout", data.agent_name,
         document=(pdf_bytes, f"Agency_Package_{data.inn}.pdf"),
         caption=(
-            f"💵 Выплата дизайнеру — договор №{data.number}\n"
-            f"👤 Менеджер: {prof.get('name') or '—'}\n"
+            f"💵 Выплата дизайнеру — по счёту, договор №{data.number}\n"
+            f"{analytics.who(target.chat.id)}\n"
             f"Исполнитель: {data.agent_name} (ИНН {data.inn})\n"
             f"Заказ: {data.order_name}\n"
             f"Вознаграждение: {data.reward}"
@@ -714,8 +714,7 @@ async def person_discount(message: types.Message, state: FSMContext) -> None:
     reward, tax, payout = person_payout(d["amount"], value)
     await state.clear()
     analytics.track(message.chat.id, "payout", d["designer"])
-    await message.answer(
-        "✅ <b>Расчёт выплаты (физ. лицо)</b>\n\n"
+    body = (
         f"Заказ / клиент: {d['order_name']}\n"
         f"Дизайнер: {d['designer']}\n"
         f"Банк получателя: {d['bank']}\n"
@@ -723,8 +722,10 @@ async def person_discount(message: types.Message, state: FSMContext) -> None:
         f"Процент дизайнера: {_money(value)} %\n"
         f"Вознаграждение: {_money(reward)} ₽\n"
         f"Налог за вывод (13%): −{_money(tax)} ₽\n"
-        f"<b>К переводу на карту: {_money(payout)} ₽</b>",
+        f"<b>К переводу на карту: {_money(payout)} ₽</b>"
     )
+    analytics.notify(f"💵 <b>Выплата дизайнеру — перевод на карту</b>\n{analytics.who(message.chat.id)}\n\n{body}")
+    await message.answer("✅ <b>Расчёт выплаты (физ. лицо)</b>\n\n" + body)
 
 
 # --- Поиск ткани: фабрика -> ткань -> цена, категория, цвета в наличии ------

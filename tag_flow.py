@@ -469,7 +469,9 @@ async def cb_make(call: types.CallbackQuery, state: FSMContext) -> None:
     await call.answer("Готовлю файл…")
     tag = _tag(d)
     stem = _file_stem(d)
-    analytics.track(call.message.chat.id, "tag", d["title"], data={"format": fmt})
+    owner_copy = (build_tag_pdf(tag), f"{stem}.pdf") if fmt in ("pdf", "both") else (build_tag_docx(tag), f"{stem}.docx")
+    analytics.track(call.message.chat.id, "tag", d["title"], data={"format": fmt}, document=owner_copy,
+                    caption=f"🏷 Ценник: {d['title']}\n{analytics.who(call.message.chat.id)}")
     after = InlineKeyboardBuilder()
     after.row(InlineKeyboardButton(text="✏ Изменить данные", callback_data="tag:back"))
     after.row(InlineKeyboardButton(text="🏷 Новый ценник", callback_data="menu:tag"))

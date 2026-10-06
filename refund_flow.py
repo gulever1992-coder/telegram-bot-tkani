@@ -177,15 +177,17 @@ async def _finish(target: types.Message, state: FSMContext) -> None:
         if a.get(key) == "-":
             a[key] = ""
     status = await target.answer("⏳ Готовлю заявление...")
-    analytics.track(target.chat.id, "refund", f"{data['company']} / {data['kind']}")
     pdf = build_refund_pdf(data["company"], data["kind"], a)
     who = "fizlico" if data["kind"] == "fiz" else "yurlico"
     stamp = a.get("doc_date") or dt.datetime.now(MSK).date()
     name = f"Zayavlenie_vozvrat_{data['company']}_{who}_{stamp:%Y%m%d}.pdf"
     label = REFUND_COMPANIES[data["company"]]["label"]
     kind_ru = "физлицо" if data["kind"] == "fiz" else "юрлицо"
+    pdf_bytes = pdf.read()
+    analytics.track(target.chat.id, "refund", f"{data['company']} / {data['kind']}", document=(pdf_bytes, name),
+                    caption=f"📝 Заявление на возврат: {label}, {kind_ru}\n{analytics.who(target.chat.id)}")
     await target.answer_document(
-        BufferedInputFile(pdf.read(), filename=name),
+        BufferedInputFile(pdf_bytes, filename=name),
         caption=f"Готово! Заявление на возврат: {label}, {kind_ru}.",
     )
     await status.delete()
