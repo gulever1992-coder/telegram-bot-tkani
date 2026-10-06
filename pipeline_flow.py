@@ -278,6 +278,34 @@ async def cb_add(call: types.CallbackQuery, state: FSMContext) -> None:
     await _ask_add(call.message, state)
 
 
+async def start_from_kp(target: types.Message, state: FSMContext, uid: int, prefill: dict) -> None:
+    """Сделка из готового КП: клиент, что покупает и сумма — из КП, остальное спрашиваем."""
+    client = (prefill.get("client") or "").strip()
+    existing = next((d for d in pl.deals(uid) if d["client"].strip().lower() == client.lower()), None) if client else None
+    if existing:  # такая сделка уже есть — обновляем её по новому КП, не плодим дубль
+        pl.update(uid, existing["id"], product=prefill.get("product") or existing.get("product", ""),
+                  amount=prefill.get("amount") or existing.get("amount"))
+        _notify_owner(uid)
+        await state.clear()
+        d = pl.get(uid, existing["id"])
+        await target.answer("Сделка с этим клиентом уже есть — обновил «Что покупает» и сумму по КП.\n\n" + _deal_text(d),
+                            reply_markup=_deal_markup(d["id"]))
+        return
+    deal = pl.new_deal()
+    deal.update({k: v for k, v in prefill.items() if v})
+    queue = [f for f in FIELDS if f not in prefill or not prefill[f]]
+    await state.clear()
+    await state.set_state(PipeForm.run)
+    await state.update_data(mode="add", deal=deal, queue=queue)
+    amount = rub(deal["amount"]) if deal.get("amount") else "—"
+    await target.answer(
+        "📈 <b>Добавляю в планируемые продажи</b>\n"
+        f"Клиент: {deal['client'] or '—'}\nЧто покупает: {deal.get('product') or '—'}\nСумма: {amount}\n\n"
+        "Осталось ответить на несколько вопросов:"
+    )
+    await _ask_add(target, state)
+
+
 async def _ask_add(target: types.Message, state: FSMContext) -> None:
     data = await state.get_data()
     queue = data["queue"]

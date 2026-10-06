@@ -862,6 +862,7 @@ async def cb_make(call: types.CallbackQuery, state: FSMContext) -> None:
         ),
     )
     b = InlineKeyboardBuilder()
+    b.row(InlineKeyboardButton(text="📈 Добавить в планируемые продажи", callback_data="kp:topipe"))
     b.row(InlineKeyboardButton(text="✏ Изменить", callback_data="kp:back"))
     b.row(InlineKeyboardButton(text="🆕 Новое КП", callback_data="menu:kp"))
     b.row(InlineKeyboardButton(text="🏠 В главное меню", callback_data="menu:home"))
@@ -871,6 +872,35 @@ async def cb_make(call: types.CallbackQuery, state: FSMContext) -> None:
         reply_markup=b.as_markup(),
     )
     asyncio.create_task(_send_fabric_info(call.message, k))  # справка по тканям — следом, не задерживая PDF
+
+
+def _pipe_prefill(k: dict) -> dict:
+    """Данные для «Планируемых продаж» из КП: клиент, что покупает, сумма."""
+    kp = _build(k)
+    client = kp.customer + (f", {kp.client_phone}" if kp.client_phone else "")
+    parts = []
+    for it in k["items"]:
+        line = f"{it['title']} × {it['qty']}"
+        if it.get("size"):
+            line += f", {it['size']}"
+        if it.get("material"):
+            line += f", {it['material']}"
+        parts.append(line)
+    product = "; ".join(parts) + f" (КП №{kp.number})"
+    return {"client": client, "product": product, "amount": int(round(kp.total()))}
+
+
+@router.callback_query(F.data == "kp:topipe")
+async def cb_to_pipeline(call: types.CallbackQuery, state: FSMContext) -> None:
+    data = await state.get_data()
+    k = data.get("kp")
+    if not k or not k.get("items"):
+        await call.answer("КП уже закрыто — откройте его в «Мои КП» и выпустите заново", show_alert=True)
+        return
+    await call.answer()
+    import pipeline_flow  # внутри функции — чтобы не было циклического импорта
+
+    await pipeline_flow.start_from_kp(call.message, state, call.from_user.id, _pipe_prefill(k))
 
 
 async def _send_fabric_info(target: types.Message, k: dict) -> None:
