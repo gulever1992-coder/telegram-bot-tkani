@@ -119,6 +119,162 @@ def build_card_pdf(card: dict) -> bytes:
     return buf.getvalue()
 
 
+def build_card_docx(card: dict) -> bytes:
+    """Та же карточка в Word: логотип, крупное название, реквизиты с тонкими линиями, чёрная плашка."""
+    from docx import Document
+    from docx.enum.table import WD_TABLE_ALIGNMENT
+    from docx.enum.text import WD_ALIGN_PARAGRAPH
+    from docx.oxml import OxmlElement
+    from docx.oxml.ns import qn
+    from docx.shared import Pt, RGBColor
+
+    FONT = "Arial"  # есть у любого получателя; IBM Plex в Word у клиента может не оказаться
+    ink, grey, hairc = RGBColor(0x12, 0x12, 0x12), RGBColor(0x87, 0x82, 0x7A), "D9D4CC"
+    content_w = MR - ML
+
+    doc = Document()
+    sec = doc.sections[0]
+    sec.page_width, sec.page_height = Pt(PW), Pt(PH)
+    sec.left_margin = sec.right_margin = Pt(ML)
+    sec.top_margin, sec.bottom_margin = Pt(34), Pt(40)
+    sec.footer_distance = Pt(20)
+    st = doc.styles["Normal"]
+    st.font.name, st.font.size = FONT, Pt(10.5)
+    st.element.rPr.rFonts.set(qn("w:eastAsia"), FONT)
+    st.paragraph_format.space_before = st.paragraph_format.space_after = Pt(0)
+
+    def run(p, text, size, bold=False, color=ink, spacing=0.0):
+        r = p.add_run(text)
+        r.font.size, r.font.bold, r.font.color.rgb = Pt(size), bold, color
+        if spacing:
+            sp = OxmlElement("w:spacing")
+            sp.set(qn("w:val"), str(int(spacing * 20)))
+            r._r.get_or_add_rPr().append(sp)
+        return r
+
+    def para_border(p, color, size_eighths):
+        pPr = p._p.get_or_add_pPr()
+        bdr = OxmlElement("w:pBdr")
+        b = OxmlElement("w:bottom")
+        b.set(qn("w:val"), "single"); b.set(qn("w:sz"), str(size_eighths))
+        b.set(qn("w:space"), "6"); b.set(qn("w:color"), color)
+        bdr.append(b)
+        pPr.append(bdr)
+
+    def cell_style(cell, bottom=None, fill=None, pad=(0, 0, 0, 0)):
+        tcPr = cell._tc.get_or_add_tcPr()
+        borders = OxmlElement("w:tcBorders")
+        for side in ("top", "left", "bottom", "right"):
+            e = OxmlElement(f"w:{side}")
+            if side == "bottom" and bottom:
+                e.set(qn("w:val"), "single"); e.set(qn("w:sz"), "4"); e.set(qn("w:color"), bottom)
+            else:
+                e.set(qn("w:val"), "nil")
+            borders.append(e)
+        tcPr.append(borders)
+        if fill:
+            shd = OxmlElement("w:shd")
+            shd.set(qn("w:val"), "clear"); shd.set(qn("w:color"), "auto"); shd.set(qn("w:fill"), fill)
+            tcPr.append(shd)
+        mar = OxmlElement("w:tcMar")
+        for side, val in zip(("top", "left", "bottom", "right"), pad):
+            m = OxmlElement(f"w:{side}")
+            m.set(qn("w:w"), str(int(val * 20))); m.set(qn("w:type"), "dxa")
+            mar.append(m)
+        tcPr.append(mar)
+
+    def table(cols: list[float]):
+        t = doc.add_table(rows=0, cols=len(cols))
+        t.alignment = WD_TABLE_ALIGNMENT.LEFT
+        t.autofit = False
+        for i, w in enumerate(cols):
+            t.columns[i].width = Pt(w)
+        return t
+
+    def set_widths(row, cols):
+        for cell, w in zip(row.cells, cols):
+            cell.width = Pt(w)
+
+    # шапка: логотип слева, сайт справа
+    cols = [content_w / 2, content_w / 2]
+    head = table(cols)
+    row = head.add_row()
+    set_widths(row, cols)
+    for cell in row.cells:
+        cell_style(cell)
+    row.cells[0].paragraphs[0].add_run().add_picture(os.path.join(BRAND, "creatica_logo.png"), height=Pt(17))
+    p = row.cells[1].paragraphs[0]
+    p.alignment = WD_ALIGN_PARAGRAPH.RIGHT
+    run(p, SITE, 8.5, color=grey)
+
+    p = doc.add_paragraph()
+    p.paragraph_format.space_before = Pt(40)
+    run(p, "КАРТОЧКА ПРЕДПРИЯТИЯ", 7, color=grey, spacing=1.1)
+    para_border(p, "121212", 6)
+    p = doc.add_paragraph()
+    p.paragraph_format.space_before = Pt(26)
+    run(p, card["short"], 22, bold=True)
+    p = doc.add_paragraph()
+    p.paragraph_format.space_before = Pt(4)
+    p.paragraph_format.space_after = Pt(18)
+    run(p, card["full"], 10.5, color=grey)
+
+    # реквизиты
+    cols = [170.0, content_w - 170.0]
+    reqs = table(cols)
+    for i, (lab, value) in enumerate(card["rows"]):
+        row = reqs.add_row()
+        set_widths(row, cols)
+        for cell in row.cells:
+            cell_style(cell, bottom=hairc, pad=(9, 0, 9, 0))
+        run(row.cells[0].paragraphs[0], lab.upper(), 7, color=grey, spacing=1.1)
+        run(row.cells[1].paragraphs[0], str(value), 10.5)
+    top_border = OxmlElement("w:top")  # линия над первой строкой — как в PDF
+    top_border.set(qn("w:val"), "single"); top_border.set(qn("w:sz"), "4"); top_border.set(qn("w:color"), hairc)
+    for cell in reqs.rows[0].cells:
+        cell._tc.tcPr.find(qn("w:tcBorders")).replace(cell._tc.tcPr.find(qn("w:tcBorders")).find(qn("w:top")),
+                                                      copy_el(top_border))
+
+    # чёрная плашка
+    doc.add_paragraph().paragraph_format.space_after = Pt(30)
+    from docx.enum.text import WD_TAB_ALIGNMENT
+
+    band = table([content_w])
+    # Word сдвигает таблицу влево на внутренний отступ ячейки — возвращаем плашку ровно к полю страницы
+    ind = OxmlElement("w:tblInd")
+    ind.set(qn("w:w"), str(18 * 20)); ind.set(qn("w:type"), "dxa")
+    look = band._tbl.tblPr.find(qn("w:tblLook"))
+    (look.addprevious if look is not None else band._tbl.tblPr.append)(ind)
+    row = band.add_row()
+    set_widths(row, [content_w])
+    white, light = RGBColor(0xFF, 0xFF, 0xFF), RGBColor(0xDB, 0xD9, 0xD4)
+    cell_style(row.cells[0], fill="121212", pad=(16, 18, 16, 18))
+    p = row.cells[0].paragraphs[0]
+    p.paragraph_format.tab_stops.add_tab_stop(Pt(content_w - 36), WD_TAB_ALIGNMENT.RIGHT)
+    run(p, "Creatica", 18, bold=True, color=white)
+    run(p, "\t" + card["short"], 9.5, color=light)
+    run(row.cells[0].add_paragraph(), SITE, 9.5, color=light)
+
+    # подвал
+    fp = sec.footer.paragraphs[0]
+    run(fp, SHOWROOM, 7, color=grey)
+    para_border_top = OxmlElement("w:pBdr")
+    t = OxmlElement("w:top")
+    t.set(qn("w:val"), "single"); t.set(qn("w:sz"), "4"); t.set(qn("w:space"), "6"); t.set(qn("w:color"), hairc)
+    para_border_top.append(t)
+    fp._p.get_or_add_pPr().append(para_border_top)
+
+    out = io.BytesIO()
+    doc.save(out)
+    return out.getvalue()
+
+
+def copy_el(el):
+    import copy
+
+    return copy.deepcopy(el)
+
+
 def build_card_preview(card: dict, dpi: int = 70) -> bytes:
     import pymupdf
 

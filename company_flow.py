@@ -1,4 +1,4 @@
-"""Карточка организации: выбор юрлица -> PDF в фирменном стиле + реквизиты текстом для копирования."""
+"""Карточка организации: выбор юрлица -> Word (.docx) в фирменном стиле + реквизиты текстом для копирования."""
 
 from __future__ import annotations
 
@@ -39,13 +39,13 @@ async def cb_card(call: types.CallbackQuery) -> None:
         await call.answer("Реквизиты ещё не загружены на сервер — обратитесь к владельцу бота.", show_alert=True)
         return
     await call.answer("Готовлю карточку…")
-    pdf = await asyncio.to_thread(cards.build_card_pdf, card)
+    doc = await asyncio.to_thread(cards.build_card_docx, card)
     analytics.track(call.message.chat.id, "card", card["short"])
     b = InlineKeyboardBuilder()
     b.row(InlineKeyboardButton(text="🏢 Другая организация", callback_data="menu:cards"))
     b.row(InlineKeyboardButton(text="🏠 В главное меню", callback_data="menu:home"))
     name = "Karta_" + ("Fenix" if key == "fenix" else "IP_Sabirov" if key == "sabirov" else key)
-    await call.message.answer_document(BufferedInputFile(pdf, filename=f"{name}.pdf"),
+    await call.message.answer_document(BufferedInputFile(doc, filename=f"{name}.docx"),
                                        caption=f"🏢 Карточка предприятия — {card['short']}")
     await call.message.answer(f"<code>{html.escape(cards.card_text(card))}</code>\n\n<i>Нажмите на текст, чтобы скопировать.</i>",
                               reply_markup=b.as_markup())
