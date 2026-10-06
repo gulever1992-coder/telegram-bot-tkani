@@ -30,6 +30,7 @@ from onboarding import ProfileGate, router as onb_router
 from pipeline_flow import router as pipeline_router
 from delivery_flow import router as delivery_router
 from company_flow import router as company_router
+from penalty_flow import router as penalty_router
 from quickmenu import router as quick_router
 from utils import images as legacy_images
 from utils import fabrics, nano, sheets
@@ -49,6 +50,7 @@ dp.include_router(kp_router)
 dp.include_router(pipeline_router)
 dp.include_router(delivery_router)
 dp.include_router(company_router)
+dp.include_router(penalty_router)
 
 MSK = dt.timezone(dt.timedelta(hours=3))
 

@@ -340,3 +340,78 @@ def build_refund_pdf(company: str, kind: str, a: dict) -> io.BytesIO:
     c.save()
     buf.seek(0)
     return buf
+
+
+# --- фирменный вариант (стиль КП) ------------------------------------------------------------
+
+
+def _d(v) -> str:
+    return f"{v:%d.%m.%Y}" if isinstance(v, dt.date) else (str(v) if v else "")
+
+
+def buyer_lines(kind: str, a: dict) -> list[str]:
+    """«От кого»: физлицо — ФИО и паспорт, юрлицо — организация в лице руководителя."""
+    if kind == "fiz":
+        lines = [a.get("name") or "—"]
+        if a.get("passport"):
+            p = a["passport"]
+            lines.append(f"Паспорт {p[:4]} {p[4:]}")
+        issued = ", ".join(x for x in (a.get("passport_issuer") or "", _d(a.get("passport_date"))) if x)
+        if issued:
+            lines.append(f"выдан {issued}")
+        return lines
+    lines = [a.get("org") or "—"]
+    if a.get("director"):
+        lines.append(f"в лице {a['director']}")
+    return lines
+
+
+def payout_section(kind: str, a: dict, title: str) -> tuple[str, list[tuple[str, str]]]:
+    """Как и куда вернуть деньги — строки реквизитов (пустые поля не печатаем)."""
+    if kind == "fiz" and a.get("method") == "cash":
+        return title, [("Способ", "Наличными из кассы магазина")]
+    if kind == "fiz":
+        rows = [("Способ", "На карточный или лицевой счёт"), ("Получатель", a.get("recipient")),
+                ("Банк получателя", a.get("bank")), ("БИК банка", a.get("bik")), ("ИНН банка", a.get("bank_inn")),
+                ("Корр. счёт банка", a.get("ks")), ("Лицевой / карточный счёт", a.get("account")),
+                ("Номер карты", a.get("card") if a.get("card") not in (None, "", "-") else "")]
+    else:
+        rows = [("Организация", a.get("pay_org")), ("ИНН / КПП", a.get("pay_inn")), ("ОГРН", a.get("pay_ogrn")),
+                ("Расчётный счёт", a.get("pay_rs")), ("Лицевой счёт", a.get("pay_ls") if a.get("pay_ls") != "-" else ""),
+                ("Банк получателя", a.get("bank")), ("БИК банка", a.get("bik")), ("ИНН банка", a.get("bank_inn")),
+                ("Корр. счёт банка", a.get("ks"))]
+    return title, [(k, str(v)) for k, v in rows if v]
+
+
+def signer_name(kind: str, a: dict) -> str:
+    return short_name(a.get("name", "") if kind == "fiz" else a.get("director_name", ""))
+
+
+def build_refund_branded(company: str, kind: str, a: dict) -> bytes:
+    from utils.statement import Statement, build_statement_pdf
+
+    co = REFUND_COMPANIES[company]
+    d = a.get("purchase_date")
+    when = f"{d.day} {MONTHS[d.month - 1]} {d.year} г." if isinstance(d, dt.date) else "____________"
+    who = "я приобрёл(а)" if kind == "fiz" else f"{a.get('org') or 'организация'} приобрела"
+    order = a.get("order") or "____________"
+    amount = a.get("amount")
+    paragraphs = [
+        f"{when} {who} в вашем магазине товар по договору / заказу клиента «{order}».",
+        "Прошу принять указанный товар и вернуть уплаченные за него денежные средства.",
+    ]
+    if a.get("reason"):
+        paragraphs.append(f"Причина возврата: {a['reason']}.")
+    return build_statement_pdf(Statement(
+        title="Заявление покупателя о возврате денежных средств",
+        to_lines=list(co["header_lines"]),
+        from_lines=buyer_lines(kind, a),
+        paragraphs=paragraphs,
+        amount=amount if amount else None,
+        amount_words=money_words(amount) if amount else "",
+        amount_label="Сумма к возврату",
+        sections=[payout_section(kind, a, "Возврат прошу осуществить")],
+        signer=signer_name(kind, a),
+        date=a.get("doc_date") if isinstance(a.get("doc_date"), dt.date) else None,
+        attachment="Приложение: акт на возврат",
+    ))

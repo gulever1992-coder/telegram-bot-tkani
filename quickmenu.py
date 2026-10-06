@@ -55,6 +55,7 @@ async def on_menu_button(message: types.Message, state: FSMContext) -> None:
     import delivery_flow
     import kp_flow
     import onboarding
+    import penalty_flow
     import pipeline_flow
     import refund_flow
     import tag_flow
@@ -64,6 +65,7 @@ async def on_menu_button(message: types.Message, state: FSMContext) -> None:
         "image": core.cb_image,
         "payment": core.cb_payment,
         "refund": refund_flow.cb_refund,
+        "penalty": penalty_flow.cb_penalty,
         "tag": tag_flow.cb_tag,
         "kp": kp_flow.cb_kp,
         "mykp": kp_flow.cb_my_kp,

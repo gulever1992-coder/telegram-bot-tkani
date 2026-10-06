@@ -6,7 +6,7 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 MENU_ITEMS = [
     ("🔎 Найти ткань", "search"),
     ("🎨 Создать картинку", "image"), ("💵 Выплата дизайнеру", "payment"),
-    ("📝 Заявление на возврат", "refund"), ("🏷 Ценник на мебель", "tag"),
+    ("📝 Заявление на возврат", "refund"), ("⚖ Выплата пени", "penalty"), ("🏷 Ценник на мебель", "tag"),
     ("📋 Коммерческое предложение", "kp"), ("📄 Мои КП", "mykp"),
     ("📈 Планируемые продажи", "pipeline"), ("🚚 Стоимость доставки", "delivery"),
     ("🏢 Карточка организации", "cards"), ("👤 Мой профиль", "profile"),
@@ -23,7 +23,7 @@ WELCOME_FULL = (
     "📋 <b>Коммерческое предложение</b> — готовый PDF для клиента\n"
     "📄 <b>Мои КП</b> — поправить и выпустить КП заново\n"
     "🏷 <b>Ценник на мебель</b> — готовый ценник\n"
-    "📝 <b>Заявление на возврат</b> и 💵 <b>выплата дизайнеру</b> — документы по шагам\n"
+    "📝 <b>Заявление на возврат</b>, ⚖ <b>выплата пени</b> и 💵 <b>выплата дизайнеру</b> — документы по шагам\n"
     "📈 <b>Планируемые продажи</b> — ваши сделки; ✅ продажа состоялась, ❌ сорвалась (с причиной)\n"
     "🚚 <b>Стоимость доставки</b> — Москва, СПб и регионы, сборка из прайса\n"
     "🏢 <b>Карточка организации</b> — реквизиты ООО «Феникс» и ИП Сабиров в Word\n"
@@ -58,6 +58,7 @@ def main_menu() -> InlineKeyboardMarkup:
     builder.row(InlineKeyboardButton(text="🎨 Создать картинку", callback_data="menu:image"))
     builder.row(InlineKeyboardButton(text="💵 Выплата дизайнеру", callback_data="menu:payment"))
     builder.row(InlineKeyboardButton(text="📝 Заявление на возврат", callback_data="menu:refund"))
+    builder.row(InlineKeyboardButton(text="⚖ Выплата пени", callback_data="menu:penalty"))
     builder.row(InlineKeyboardButton(text="🏷 Ценник на мебель", callback_data="menu:tag"))
     builder.row(InlineKeyboardButton(text="📋 Коммерческое предложение", callback_data="menu:kp"))
     builder.row(InlineKeyboardButton(text="📄 Мои КП", callback_data="menu:mykp"))

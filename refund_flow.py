@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import datetime as dt
 import re
 from dataclasses import dataclass
@@ -16,7 +17,7 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 import analytics
 import keyboards as kb
 from utils.ui import show
-from utils.refund import REFUND_COMPANIES, build_refund_pdf
+from utils.refund import REFUND_COMPANIES, build_refund_branded
 
 router = Router()
 MSK = dt.timezone(dt.timedelta(hours=3))
@@ -177,13 +178,12 @@ async def _finish(target: types.Message, state: FSMContext) -> None:
         if a.get(key) == "-":
             a[key] = ""
     status = await target.answer("⏳ Готовлю заявление...")
-    pdf = build_refund_pdf(data["company"], data["kind"], a)
+    pdf_bytes = await asyncio.to_thread(build_refund_branded, data["company"], data["kind"], a)
     who = "fizlico" if data["kind"] == "fiz" else "yurlico"
     stamp = a.get("doc_date") or dt.datetime.now(MSK).date()
     name = f"Zayavlenie_vozvrat_{data['company']}_{who}_{stamp:%Y%m%d}.pdf"
     label = REFUND_COMPANIES[data["company"]]["label"]
     kind_ru = "физлицо" if data["kind"] == "fiz" else "юрлицо"
-    pdf_bytes = pdf.read()
     analytics.track(target.chat.id, "refund", f"{data['company']} / {data['kind']}", document=(pdf_bytes, name),
                     caption=f"📝 Заявление на возврат: {label}, {kind_ru}\n{analytics.who(target.chat.id)}")
     await target.answer_document(
