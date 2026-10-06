@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
 import datetime as dt
 import io
+import logging
 import re
 from dataclasses import asdict
 
@@ -14,14 +16,16 @@ from aiogram.types import BufferedInputFile, InlineKeyboardButton
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 import analytics
+import config
 import keyboards as kb
 import onboarding
 import profiles
-from utils import pricelist
+from utils import fabrics, pricelist
 from utils.kp import KP, KPItem, PAYMENTS, build_kp_pdf, build_kp_preview, date_ru, prep_photo, rub
 from utils.ui import show
 
 router = Router()
+log = logging.getLogger("kp")
 MSK = dt.timezone(dt.timedelta(hours=3))
 LAST_MANAGER: dict[int, tuple[str, str]] = {}  # пока бот работает, помним менеджера
 
@@ -751,6 +755,47 @@ async def cb_make(call: types.CallbackQuery, state: FSMContext) -> None:
         caption=f"📋 КП для: {kp.customer or 'заказчика'} — итого {rub(kp.total())}",
         reply_markup=b.as_markup(),
     )
+    asyncio.create_task(_send_fabric_info(call.message, k))  # справка по тканям — следом, не задерживая PDF
+
+
+async def _send_fabric_info(target: types.Message, k: dict) -> None:
+    """Ткани из поля «Материал» позиций КП: цена, категория, наличие (и выбранного цвета)."""
+    texts = []
+    for it in k["items"]:
+        texts.append(it.get("material") or "")
+        if it.get("alt"):
+            texts.append(it["alt"].get("material") or "")
+    text = "\n".join(t for t in texts if t)
+    if not text:
+        return
+    try:
+        price, stock = await asyncio.wait_for(fabrics.load(config.PRICE_CSV_URL, config.STOCK_CSV_URL), timeout=25)
+    except Exception:  # noqa: BLE001 — справка необязательна, КП уже отправлено
+        log.warning("КП: не удалось загрузить ткани для справки", exc_info=True)
+        return
+    blocks, seen = [], set()
+    for line in texts:
+        for fabric, rest in fabrics.find_in_text(price, line):
+            if (fabric.name, fabric.supplier, tuple(rest)) in seen:
+                continue
+            seen.add((fabric.name, fabric.supplier, tuple(rest)))
+            rows = fabrics.stock_for(fabric, stock, price)
+            has_stock = any(s.supplier == fabric.supplier for s in stock)
+            block = fabrics.format_fabric(fabric, rows, has_stock, limit=1500)
+            color = fabrics.color_line(rows, rest) if rows else ""
+            if color:
+                head, _, tail = block.partition("\n")
+                block = f"{head}\n{color}\n{tail}"
+            blocks.append(block)
+    if not blocks:
+        return
+    text = "🧵 <b>Ткани в этом КП</b>\n\n" + "\n\n".join(blocks[:4])
+    if len(text) <= 4000:
+        await target.answer(text)
+        return
+    await target.answer("🧵 <b>Ткани в этом КП</b>")  # длинно — каждая ткань отдельным сообщением
+    for block in blocks[:4]:
+        await target.answer(block)
 
 
 @router.callback_query(F.data == "kp:back", KPForm.run)

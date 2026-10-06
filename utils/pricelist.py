@@ -52,6 +52,7 @@ class Item:
     article: str = ""
     price_from: float | None = None
     assembly: float | None = None  # «Стоимость сборки» из листов «new», руб. за 1 шт
+    parts: int | None = None  # «Из скольки частей состоит» из листов «new»
     extra: dict = field(default_factory=dict)
 
     @property
@@ -211,6 +212,7 @@ def _parse_new(rows: list[list[str]], source: str) -> list[Item]:
     opt_2025 = next((i for i in opt_cols if "2025" in header[i]), opt_cols[-1] if opt_cols else None)
     cat4 = next((i for i, h in enumerate(header) if h.startswith("4 кат")), None)
     asm_col = next((i for i, h in enumerate(header) if "сборк" in h), None)
+    parts_col = next((i for i, h in enumerate(header) if "част" in h), None)
 
     items = []
     for row in rows[header_idx + 1:]:
@@ -231,6 +233,7 @@ def _parse_new(rows: list[list[str]], source: str) -> list[Item]:
                 article=_cell(row, art_col).replace(".0", ""),
                 price_from=price,
                 assembly=to_number(_cell(row, asm_col)),
+                parts=first_number(_cell(row, parts_col)),
             )
         )
     return items

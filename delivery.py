@@ -146,7 +146,7 @@ class Item:
 
     @property
     def pieces(self) -> int:
-        return self.qty * (max(self.parts, 1) if self.category == "big" else 1)
+        return self.qty * max(self.parts, 1)
 
 
 def _names(items: list[Item]) -> str:
@@ -204,7 +204,7 @@ class Quote:
                         rate = MANUAL_BIG_RATES.get(self.lift_difficulty, 600)
                         detail = f" ({it.pieces} част. × {rate} ₽ × {self.floors} эт.)"
                     elif it.category == "armchair":
-                        detail = f" ({it.qty} шт × {MANUAL_ARMCHAIR} ₽ × {self.floors} эт.)"
+                        detail = f" ({it.pieces} част. × {MANUAL_ARMCHAIR} ₽ × {self.floors} эт.)"
                     self.lines.append((f"Ручной подъём: {it.label}{detail}", c))
                 else:
                     self.lines.append((f"Подъём: {it.label} — индивидуально, уточните у логистики", 0))

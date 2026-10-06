@@ -57,8 +57,8 @@ def _parts_from_title(title: str) -> int | None:
 
 
 def _new_item(category: str, name: str = "", price_asm: int = 0, from_price: bool = False,
-              dims: list | None = None) -> dict:
-    parts = _parts_from_title(name)
+              dims: list | None = None, parts: int | None = None) -> dict:
+    parts = parts or _parts_from_title(name)  # колонка прайса «Из скольки частей», иначе из названия
     long_case = bool(dims) and category == "case" and max(dims[:2] or [0]) > 1000
     return {"category": category, "name": name, "qty": 1, "long_case": long_case, "assembly_price": 0,
             "parts": parts or 1, "parts_known": parts is not None or category != "big",
@@ -374,11 +374,13 @@ async def cb_pick(call: types.CallbackQuery, state: FSMContext) -> None:
 
 
 async def _select_found(target: types.Message, state: FSMContext, f: dict, edit: bool = False) -> None:
-    item = _new_item(f["category"], f["title"], f["asm"], from_price=True, dims=f.get("dims"))
+    item = _new_item(f["category"], f["title"], f["asm"], from_price=True, dims=f.get("dims"),
+                     parts=f.get("parts"))
     await state.update_data(item=item, queue=_item_queue(item), phase="item", found=None)
     size = f" {f['size']}" if f.get("size") else ""
     asm = f"сборка {rub(f['asm'])}" if f["asm"] else "без сборки"
-    text = f"✔ <b>{f['title']}</b>{size} — {asm}."
+    parts = f", частей: {item['parts']}" if item["parts"] > 1 else ""
+    text = f"✔ <b>{f['title']}</b>{size} — {asm}{parts}."
     if edit:
         try:
             await target.edit_text(text)

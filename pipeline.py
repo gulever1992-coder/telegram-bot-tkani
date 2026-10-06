@@ -48,7 +48,7 @@ def _save(uid: int, items: list[dict]) -> None:
 
 
 def new_deal() -> dict:
-    return {"id": 0, "client": "", "amount": None, "arrived": "", "stage": "", "status": "green",
+    return {"id": 0, "client": "", "product": "", "amount": None, "arrived": "", "stage": "", "status": "green",
             "planned_date": "", "blocker": "", "lost_reason": ""}
 
 

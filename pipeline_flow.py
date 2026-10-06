@@ -20,12 +20,12 @@ from utils.ui import show
 router = Router()
 MSK = dt.timezone(dt.timedelta(hours=3))
 
-FIELDS = ["client", "amount", "arrived", "stage", "status", "planned_date", "blocker"]
+FIELDS = ["client", "product", "amount", "arrived", "stage", "status", "planned_date", "blocker"]
 FIELD_TITLES = {
-    "client": "Клиент / сделка", "amount": "Потенциальная сумма", "arrived": "Когда пришёл",
+    "client": "Клиент / сделка", "product": "Что покупает", "amount": "Потенциальная сумма", "arrived": "Когда пришёл",
     "stage": "Текущая стадия", "status": "Статус", "planned_date": "Дата продажи", "blocker": "Что мешает",
 }
-REQUIRED = {"client", "status", "arrived", "planned_date"}
+REQUIRED = {"client", "product", "status", "arrived", "planned_date"}
 
 
 class PipeForm(StatesGroup):
@@ -72,25 +72,33 @@ def _num(text: str) -> int | None:
 
 
 def _prompt(field: str) -> tuple[str, list[tuple[str, str]]]:
+    text, buttons = _prompt_body(field)
+    return f"{FIELDS.index(field) + 1}. {text}", buttons
+
+
+def _prompt_body(field: str) -> tuple[str, list[tuple[str, str]]]:
     if field == "client":
-        return "1️⃣ <b>Клиент / сделка</b> — имя или компания:", []
+        return "<b>Клиент / сделка</b> — имя или компания:", []
+    if field == "product":
+        return ("<b>Что планирует купить</b> — модель, ткань, конфигурация. Например:\n"
+                "<i>диван Джун 2300, велюр Velutto 12, угловой правый, механизм дельфин</i>"), []
     if field == "amount":
-        return "2️⃣ <b>Потенциальная сумма</b>, руб.:", []
+        return "<b>Потенциальная сумма</b>, руб.:", []
     if field == "arrived":
         return (
-            "3️⃣ <b>Когда пришёл клиент?</b> Выберите кнопкой или напишите дату (например: 5.10 или 05.10.2026):",
+            "<b>Когда пришёл клиент?</b> Выберите кнопкой или напишите дату (например: 5.10 или 05.10.2026):",
             [("Сегодня", "ago:0"), ("Вчера", "ago:1"), ("3 дня назад", "ago:3"), ("Неделю назад", "ago:7")],
         )
     if field == "stage":
-        return "4️⃣ <b>Текущая стадия</b>:", [(s, f"stage:{i}") for i, s in enumerate(pl.STAGES)]
+        return "<b>Текущая стадия</b>:", [(s, f"stage:{i}") for i, s in enumerate(pl.STAGES)]
     if field == "status":
-        return "5️⃣ <b>Статус</b>:", [(label, f"status:{key}") for key, label in pl.STATUSES]
+        return "<b>Статус</b>:", [(label, f"status:{key}") for key, label in pl.STATUSES]
     if field == "planned_date":
         return (
-            "6️⃣ <b>Планируемая дата продажи</b>. Выберите кнопкой или напишите дату (например: 20.10 или 20.10.2026):",
+            "<b>Планируемая дата продажи</b>. Выберите кнопкой или напишите дату (например: 20.10 или 20.10.2026):",
             [("Сегодня", "in:0"), ("Через 3 дня", "in:3"), ("Через неделю", "in:7"), ("Через 2 недели", "in:14")],
         )
-    return "7️⃣ <b>Что мешает / следующий шаг</b>:", []
+    return "<b>Что мешает / следующий шаг</b>:", []
 
 
 def _ask_markup(field: str, buttons: list[tuple[str, str]]) -> types.InlineKeyboardMarkup:
@@ -107,6 +115,8 @@ def _parse(field: str, value: str) -> tuple[str | int | None, str | None]:
     """(значение, None) или (None, сообщение об ошибке). value уже без кнопочных префиксов."""
     if field == "client":
         return (value.strip(), None) if value and value.strip() else (None, "Введите название сделки или имя клиента.")
+    if field == "product":
+        return (value.strip(), None) if value and value.strip() else (None, "Напишите модель, ткань и конфигурацию.")
     if field == "amount":
         n = _num(value)
         return (n, None) if n else (None, "Введите сумму числом, например 250000.")
@@ -173,6 +183,7 @@ def _deal_text(d: dict) -> str:
     amount = rub(d["amount"]) if d.get("amount") else "не указана"
     return (
         f"<b>{d['client']}</b>\n"
+        f"Что покупает: {d.get('product') or '—'}\n"
         f"Потенциальная сумма: {amount}\n"
         f"Когда пришёл: {d.get('arrived') or '—'}\n"
         f"Текущая стадия: {d.get('stage') or '—'}\n"
@@ -207,6 +218,7 @@ def _report_text(uid: int) -> str:
         amount = rub(d["amount"]) if d.get("amount") else "не указана"
         lines.append(
             f"{i}. <b>{d['client']}</b> {pl.STATUS_LABEL.get(d['status'], '')}\n"
+            f"   Что покупает: {d.get('product') or '—'}\n"
             f"   Потенциально: {amount}\n"
             f"   Пришёл: {d.get('arrived') or '—'}\n"
             f"   Стадия: {d.get('stage') or '—'}\n"

@@ -328,3 +328,58 @@ def format_fabric(fabric: Fabric, stock_rows: list[tuple[StockItem, str]], has_s
     if len(text) > limit:
         text = text[: limit - 60].rsplit(",", 1)[0] + "…\n<i>Список длинный — полный в таблице.</i>"
     return text
+
+
+# --- ткани, упомянутые в свободном тексте (поле «Материал» в КП) ------------------------------
+
+
+def find_in_text(fabrics: list[Fabric], text: str, limit: int = 3) -> list[tuple[Fabric, list[str]]]:
+    """Ткани прайса, названия которых встречаются в тексте; к каждой — слово после названия (цвет)."""
+    tw = words(text)
+    hits = []
+    for f in fabrics:
+        best = None
+        for key in f.keys:
+            if len(key) == 1 and len(key[0]) < 4:
+                continue  # короткие одиночные слова дают ложные совпадения
+            pos, span = _match_pos(tw, key)
+            if pos >= 0 and (best is None or len(key) > best[0]):
+                best = (len(key), pos, span)
+        if best:
+            length, pos, span = best
+            has_color = pos + span < len(tw) and tw[pos + span][:1].isdigit()
+            hits.append((length, has_color, pos, span, f))
+    # точнее название и есть номер цвета после него — выше («рогожка Alfa 03» -> Alfa, а не «Рогожка»)
+    hits.sort(key=lambda h: (-h[0], not h[1]))
+    taken: list[range] = []
+    out: list[tuple[Fabric, list[str]]] = []
+    for length, has_color, pos, span, f in hits:
+        rng = range(pos, pos + span)
+        nxt = pos + span
+        if any(set(rng) & set(t) or nxt in t for t in taken):
+            continue  # пересекается с найденной тканью или стоит прямо перед ней (вид ткани, а не модель)
+        taken.append(rng)
+        out.append((f, tw[nxt:nxt + 1]))
+        if len(out) >= limit:
+            break
+    return out
+
+
+def _same_color(a: str, b: str) -> bool:
+    if a.isdigit() and b.isdigit():
+        return int(a) == int(b)  # «5» и «05» — один цвет
+    return a == b
+
+
+def color_line(stock_rows: list[tuple[StockItem, str]], rest: list[str]) -> str:
+    """Строка о наличии конкретного цвета, если менеджер указал его после названия ткани."""
+    if not rest:
+        return ""
+    want = rest[0]
+    for s, color in stock_rows:
+        cw = words(color)
+        if cw and _same_color(cw[0], want):
+            state = {"yes": "✅ в наличии", "ask": "❓ мало / по запросу", "no": "❌ нет в наличии"}[_is_available(s)]
+            meters = f" ({s.meters} м)" if s.meters else ""
+            return f"🎨 Цвет <b>{esc(color)}</b>: {state}{meters}"
+    return f"🎨 Цвет «{esc(want)}» в остатках не найден — уточните у поставщика."
