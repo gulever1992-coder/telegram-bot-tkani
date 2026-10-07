@@ -1,7 +1,7 @@
 """Заявление о выплате неустойки (пени) за просрочку передачи товара: по шагам, как возврат -> PDF в стиле КП.
 
-Пени считаем сами: предоплата × ставка % × дни просрочки (не больше суммы предоплаты — как в ст. 23.1
-Закона «О защите прав потребителей»). Менеджер может согласиться с расчётом или вписать согласованную сумму.
+Пени считаем сами: срок доставки = дата готовности + 7 рабочих дней; дни просрочки (до фактической доставки)
+× сумма договора × 0,1% в день. Менеджер может согласиться с расчётом или вписать согласованную сумму.
 """
 
 from __future__ import annotations
@@ -45,12 +45,10 @@ _YUR = [
     Step("director_name", "ФИО руководителя для подписи (например: Петров Пётр Петрович):"),
 ]
 _CALC = [
-    Step("prepay", "Сумма предварительной оплаты по договору, руб.:", "amount"),
-    Step("due_date", "Срок передачи товара по договору (ДД.ММ.ГГГГ):", "date"),
-    Step("fact_date", "Когда товар фактически передан (ДД.ММ.ГГГГ)?", "date",
-         buttons=(("Ещё не передан — считать по сегодня", "=today"),)),
-    Step("rate", "Размер пени, % за каждый день просрочки:", "amount",
-         buttons=(("0,5% — закон о защите прав потребителей", "0.5"), ("0,1%", "0.1"))),
+    Step("contract_sum", "Сумма договора, руб.:", "amount"),
+    Step("ready_date", "Дата готовности по договору (ДД.ММ.ГГГГ):", "date"),
+    Step("fact_date", "Фактическая дата доставки (ДД.ММ.ГГГГ):", "date",
+         buttons=(("Ещё не доставлен — считать по сегодня", "=today"),)),
     Step("amount", "Сумма пени к выплате, руб.:", "amount"),  # кнопка с расчётом добавляется на лету
 ]
 _PAY_FIZ = [
@@ -76,7 +74,9 @@ _PAY_YUR = [
     Step("ks", "Корреспондентский счёт банка (20 цифр):", "digits", (20,)),
 ]
 _TAIL = [Step("doc_date", "Дата заявления (ДД.ММ.ГГГГ):", "date", buttons=(("📅 Сегодня", "=today"),))]
-REQUIRED = {"prepay", "due_date", "fact_date", "rate", "amount", "method"}
+REQUIRED = {"contract_sum", "ready_date", "fact_date", "amount", "method"}
+RATE = 0.1  # % от суммы договора за каждый день просрочки
+DELIVERY_WORKDAYS = 7  # на доставку после даты готовности
 
 
 def _steps(kind: str) -> list[Step]:
@@ -95,13 +95,27 @@ def _today() -> dt.date:
     return dt.datetime.now(MSK).date()
 
 
+def add_workdays(d: dt.date, n: int) -> dt.date:
+    """Дата через n рабочих дней (пн–пт, праздники не учитываются)."""
+    while n > 0:
+        d += dt.timedelta(days=1)
+        if d.weekday() < 5:
+            n -= 1
+    return d
+
+
+def delivery_deadline(a: dict) -> dt.date | None:
+    ready = a.get("ready_date")
+    return add_workdays(ready, DELIVERY_WORKDAYS) if isinstance(ready, dt.date) else None
+
+
 def penalty_calc(a: dict) -> tuple[int, float]:
-    """(дней просрочки, сумма пени) — не больше суммы предоплаты."""
-    due, fact, prepay, rate = a.get("due_date"), a.get("fact_date"), a.get("prepay"), a.get("rate")
-    if not (isinstance(due, dt.date) and isinstance(fact, dt.date) and prepay and rate):
+    """(дней просрочки, сумма пени): срок = готовность + 7 раб. дней; дни × сумма договора × 0,1%."""
+    deadline, fact, total = delivery_deadline(a), a.get("fact_date"), a.get("contract_sum")
+    if not (deadline and isinstance(fact, dt.date) and total):
         return 0, 0.0
-    days = max((fact - due).days, 0)
-    return days, round(min(prepay * rate / 100 * days, prepay), 2)
+    days = max((fact - deadline).days, 0)
+    return days, round(total * RATE / 100 * days, 2)
 
 
 def _markup(step: Step, answers: dict) -> types.InlineKeyboardMarkup:
@@ -129,8 +143,12 @@ async def _ask(target: types.Message, state: FSMContext) -> None:
     text = f"{len(answers) + 1}. {step.prompt}"
     if step.key == "amount":
         days, calc = penalty_calc(answers)
-        text = (f"🧮 Просрочка: <b>{days} дн.</b> × {str(answers['rate']).rstrip('0').rstrip('.').replace('.', ',')}% × {money(answers['prepay'])} = "
-                f"<b>{money(calc)}</b>" + (" (ограничено суммой предоплаты)" if calc >= answers["prepay"] else "")
+        fact = answers["fact_date"]
+        text = (f"🧮 Готовность {answers['ready_date']:%d.%m.%Y} + {DELIVERY_WORKDAYS} раб. дней = срок доставки "
+                f"<b>{delivery_deadline(answers):%d.%m.%Y}</b>\n"
+                f"{'Не доставлен, считаем по' if answers.get('not_delivered') else 'Доставлено'} {fact:%d.%m.%Y} → "
+                f"просрочка <b>{days} дн.</b>\n"
+                f"{days} дн. × 0,1% × {money(answers['contract_sum'])} = <b>{money(calc)}</b>"
                 + f"\n\n{text}\nНажмите «По расчёту» или впишите согласованную сумму.")
     await target.answer(text, reply_markup=_markup(step, answers))
 
@@ -148,20 +166,17 @@ def _statement(company: str, kind: str, a: dict) -> Statement:
     cd = a.get("contract_date")
     contract = f"договору / заказу «{a.get('order') or '____'}»" + (
         f" от {cd.day} {MONTHS[cd.month - 1]} {cd.year} г." if isinstance(cd, dt.date) else "")
-    due, fact = a.get("due_date"), a.get("fact_date")
-    fact_txt = "на дату заявления товар не передан" if a.get("not_delivered") or not isinstance(fact, dt.date) \
-        else f"фактически товар передан {fact:%d.%m.%Y}"
-    law = " (ст. 23.1 Закона РФ «О защите прав потребителей»)" if kind == "fiz" and a.get("rate") == 0.5 else ""
+    ready, fact, deadline = a.get("ready_date"), a.get("fact_date"), delivery_deadline(a)
+    fact_txt = "на дату заявления товар не доставлен" if a.get("not_delivered") or not isinstance(fact, dt.date) \
+        else f"фактически товар доставлен {fact:%d.%m.%Y}"
     amount = a.get("amount") or calc
     paragraphs = [
-        f"По {contract} мной внесена предварительная оплата в размере {money(a.get('prepay') or 0)}. "
-        f"Срок передачи товара по договору — {due:%d.%m.%Y}, {fact_txt}." if isinstance(due, dt.date) else
-        f"По {contract} внесена предварительная оплата в размере {money(a.get('prepay') or 0)}.",
-        f"Просрочка передачи товара составила {days} дн. Прошу выплатить неустойку (пени) в размере "
-        f"{str(a.get('rate', 0)).rstrip('0').rstrip('.').replace('.', ',')}% от суммы предварительной оплаты за каждый день просрочки{law}.",
+        f"Сумма по {contract} составляет {money(a.get('contract_sum') or 0)}."
+        + (f" Дата готовности товара — {ready:%d.%m.%Y}, срок доставки — {DELIVERY_WORKDAYS} рабочих дней, "
+           f"т. е. до {deadline:%d.%m.%Y}; {fact_txt}." if deadline else ""),
+        f"Просрочка доставки товара составила {days} дн. Прошу выплатить неустойку (пени) в размере "
+        f"0,1% от суммы договора за каждый день просрочки.",
     ]
-    if kind == "yur":
-        paragraphs[0] = paragraphs[0].replace("мной внесена", "внесена")
     return Statement(
         title="Заявление о выплате неустойки (пени)",
         to_lines=list(REFUND_COMPANIES[company]["header_lines"]),
@@ -266,8 +281,6 @@ async def cb_value(call: types.CallbackQuery, state: FSMContext) -> None:
         value = penalty_calc(answers)[1]
     elif value in ("=name", "=org"):
         value = answers.get(value[1:], "")
-    elif step.key == "rate":
-        value = float(value)
     await _store(call.message, state, step, value)
 
 
