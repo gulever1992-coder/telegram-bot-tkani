@@ -116,3 +116,108 @@ def parse_items(text: str) -> list[tuple[str, int]]:
         if name:
             items.append((name, max(qty, 1)))
     return items
+
+
+# --- ближайший город из таблицы, если нужного города в ней нет ------------------------------------
+# Координаты: utils/ru_cities.json (≈1100 городов РФ, данные hflabs/city); посёлки и сёла, которых там нет,
+# ищем через OpenStreetMap Nominatim (1 запрос, результат кэшируем).
+
+import asyncio
+import json
+import math
+import os
+
+_CITIES: dict[str, tuple[float, float, int]] = {}
+_GEO_CACHE: dict[str, tuple[float, float] | None] = {}
+_NOMINATIM = "https://nominatim.openstreetmap.org/search"
+_UA = "CreaticaBot/1.0 (delivery estimate)"
+_geo_lock = asyncio.Lock()
+_PLACES = {"city", "town", "village", "hamlet", "locality", "isolated_dwelling", "suburb", "quarter", "municipality"}
+
+
+def _cities() -> dict[str, tuple[float, float, int]]:
+    if not _CITIES:
+        path = os.path.join(os.path.dirname(__file__), "ru_cities.json")
+        with open(path, encoding="utf-8") as f:
+            for name, _region, lat, lon, pop in json.load(f):
+                key = _normalize(name)
+                if key not in _CITIES or pop > _CITIES[key][2]:  # одноимённые — берём крупный
+                    _CITIES[key] = (lat, lon, pop)
+    return _CITIES
+
+
+def _names(city: str) -> list[str]:
+    """«ВОЛЖСКИЙ (Волгоград)» -> ["волжский", "волгоград"]; «Братск (Иркутская обл.)» -> ["братск", ...]."""
+    main = re.sub(r"\(.*?\)", "", city)
+    out = [_normalize(main)]
+    for inner in re.findall(r"\((.*?)\)", city):
+        out.append(_normalize(inner))
+    return [n for n in out if n]
+
+
+async def _nominatim(query: str) -> tuple[float, float] | None:
+    key = _normalize(query)
+    if key in _GEO_CACHE:
+        return _GEO_CACHE[key]
+    params = {"q": query, "countrycodes": "ru", "format": "json", "limit": "10", "accept-language": "ru"}
+    async with _geo_lock:  # правила Nominatim: не чаще 1 запроса в секунду
+        try:
+            async with aiohttp.ClientSession(headers={"User-Agent": _UA}) as session:
+                async with session.get(_NOMINATIM, params=params, timeout=aiohttp.ClientTimeout(total=8)) as resp:
+                    found = await resp.json() if resp.status == 200 else []
+        except (aiohttp.ClientError, asyncio.TimeoutError, ValueError):
+            return None  # сеть — не кэшируем, попробуем в следующий раз
+        await asyncio.sleep(1)
+    # только населённые пункты (без магазинов и улиц); из одноимённых — самый крупный (меньший place_rank)
+    found = [f for f in found if f.get("addresstype") in _PLACES]
+    found.sort(key=lambda f: (f.get("place_rank", 99), -float(f.get("importance") or 0)))
+    point = (float(found[0]["lat"]), float(found[0]["lon"])) if found else None
+    _GEO_CACHE[key] = point
+    return point
+
+
+async def locate(name: str) -> tuple[float, float] | None:
+    """Координаты города: сначала справочник, потом Nominatim."""
+    for n in _names(name):
+        hit = _cities().get(n)
+        if hit:
+            return hit[0], hit[1]
+    return await _nominatim(re.sub(r"\(.*?\)", "", name).strip() or name)
+
+
+def _km(a: tuple[float, float], b: tuple[float, float]) -> float:
+    lat1, lon1, lat2, lon2 = map(math.radians, (*a, *b))
+    h = math.sin((lat2 - lat1) / 2) ** 2 + math.cos(lat1) * math.cos(lat2) * math.sin((lon2 - lon1) / 2) ** 2
+    return 6371 * 2 * math.asin(math.sqrt(h))
+
+
+HOME = {"Москва": (55.7540, 37.6204), "Санкт-Петербург": (59.9390, 30.3158)}
+HOME_RADIUS_KM = 70  # ≈ 50 км от МКАД/КАД — возим сами, считаем по городскому прайсу
+
+
+async def home_city(query: str) -> tuple[str, int] | None:
+    """Если адрес в зоне нашей доставки (Москва/СПб + ~50 км) — (город, км от центра)."""
+    point = await locate(query)
+    if point is None:
+        return None
+    for name, center in HOME.items():
+        d = _km(point, center)
+        if d <= HOME_RADIUS_KM:
+            return name, round(d)
+    return None
+
+
+async def nearest(query: str) -> tuple[dict, int] | None:
+    """Ближайший к запросу город из таблицы: (строка таблицы, км по прямой). None — запрос не нашли на карте."""
+    point = await locate(query)
+    if point is None:
+        return None
+    best: tuple[float, dict] | None = None
+    for row in await _fetch_rows():
+        p = await locate(row["city"])  # чего нет в справочнике — один раз через Nominatim, дальше из кэша
+        if p is None:
+            continue
+        d = _km(point, p)
+        if best is None or d < best[0]:
+            best = (d, row)
+    return (best[1], round(best[0])) if best else None

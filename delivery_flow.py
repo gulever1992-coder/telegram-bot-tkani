@@ -255,8 +255,14 @@ async def _finish_quote(target: types.Message, state: FSMContext) -> None:
 # --- доставка в регион: город из таблицы + позиции текстом -------------------------------
 
 
+def _near_note(entry: dict) -> str:
+    return (f"📍 Города «{entry['asked']}» нет в таблице. Ближайший город — <b>{entry['city']}</b> "
+            f"(~{entry['km']} км по прямой), стоимость считаю по нему.")
+
+
 def _region_block(entry: dict) -> str:
-    lines = [f"🌍 <b>{entry['city']}</b>", f"Откуда выгоднее отгружать: {entry['from'] or '—'}"]
+    lines = [_near_note(entry), ""] if entry.get("asked") else []
+    lines += [f"🌍 <b>{entry['city']}</b>", f"Откуда выгоднее отгружать: {entry['from'] or '—'}"]
     if entry["tk"]:
         lines.append(f"\n<b>Транспортная компания:</b>\n{entry['tk']}")
     if entry["ati"]:
@@ -279,6 +285,9 @@ def _region_result(entry: dict, items: list[tuple[str, int]]) -> str:
         "\n<i>Диапазон — по прайсу ТК для стандартных габаритов (диван 2300×1060×850, кресло 870×930×1060). "
         "Если позиция крупнее или позиций несколько — точную стоимость подтверждает транспортная компания.</i>"
     )
+    if entry.get("asked"):
+        lines.append(f"\n⚠ Для «{entry['asked']}» это <b>ориентировочная стоимость</b> по ближайшему городу "
+                     f"({entry['city']}). Детальнее — после расчёта стоимости логистом.")
     return "\n".join(lines)
 
 
@@ -537,6 +546,25 @@ async def msg_value(message: types.Message, state: FSMContext) -> None:
             await status.edit_text(f"⚠ {exc}", reply_markup=b.as_markup())
             return
         if not matches:
+            query = message.text.strip()
+            await status.edit_text("🔎 Такого города в таблице нет, ищу ближайший...")
+            home = await regions.home_city(query)
+            if home:
+                city, km = home
+                code = "msk" if city == "Москва" else "spb"
+                b = InlineKeyboardBuilder()
+                b.row(InlineKeyboardButton(text=f"🏙 Считать как {city}", callback_data=f"deliv:city:{code}"))
+                b.row(InlineKeyboardButton(text="🏠 В главное меню", callback_data="menu:home"))
+                await status.edit_text(
+                    f"📍 «{query}» — ~{km} км от центра: это зона нашей доставки ({city} + до 50 км). "
+                    f"Посчитайте по городскому прайсу:", reply_markup=b.as_markup())
+                return
+            near = await regions.nearest(query)
+            if near:
+                entry, km = near
+                await status.delete()
+                await _region_ask_items(message, state, {**entry, "asked": query, "km": km})
+                return
             b = InlineKeyboardBuilder()
             b.row(InlineKeyboardButton(text="📄 Открыть таблицу тарифов", url=REGIONS_URL))
             b.row(InlineKeyboardButton(text="🏠 В главное меню", callback_data="menu:home"))
