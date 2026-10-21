@@ -4,7 +4,7 @@
 
 Переменные окружения:
   PRIVATE_BUNDLE_B64  — тот же архив с реквизитами, печатью и токеном админ-бота, что у бота
-  WEB_STORE_CHAT      — id закрытого канала, где админ-бот хранит данные сайта (без него — файлы web_data/)
+  WEB_STORE_CHAT      — (необязательно) другой чат для данных сайта; по умолчанию — чат владельца с админ-ботом
   WEB_BASE_URL        — адрес сайта для ссылок «Пустить / Отклонить» (на Render берётся сам)
   WEB_SECRET          — ключ подписи cookie (по умолчанию выводится из токена админ-бота)
 """
@@ -288,8 +288,10 @@ async def on_startup(app: web.Application) -> None:
     admin = Bot(config.ADMIN_BOT_TOKEN, default=DefaultBotProperties(parse_mode="HTML")) \
         if config.ADMIN_BOT_TOKEN and not os.getenv("WEB_NO_ADMIN") else None  # WEB_NO_ADMIN=1 — локальные тесты
     app["admin_bot"] = admin
+    # данные сайта — в чате владельца с админ-ботом (или в отдельном чате, если задан WEB_STORE_CHAT)
     chat = os.getenv("WEB_STORE_CHAT", "").strip()
-    STORE = Store(admin, int(chat) if chat else None)
+    store_chat = int(chat) if chat else (config.ADMIN_CHAT_IDS[0] if config.ADMIN_CHAT_IDS else None)
+    STORE = Store(admin, store_chat)
     api.STORE = STORE
     await STORE.load()
     notify.configure(admin, config.ADMIN_CHAT_IDS)

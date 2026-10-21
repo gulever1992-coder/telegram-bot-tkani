@@ -15,5 +15,3 @@ services:
         generateValue: true
       - key: PRIVATE_BUNDLE_B64  # тот же архив, что секрет бота на GitHub
         sync: false
-      - key: WEB_STORE_CHAT  # id закрытого канала, куда добавлен админ-бот
-        sync: false
