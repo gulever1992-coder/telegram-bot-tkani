@@ -33,6 +33,8 @@ def _unpack_bundle() -> None:
 
 
 _unpack_bundle()
+if not os.getenv("TELEGRAM_BOT_TOKEN"):  # основной бот сайту не нужен, config.py требует только наличие
+    os.environ["TELEGRAM_BOT_TOKEN"] = "web-only"
 
 import asyncio  # noqa: E402
 import html  # noqa: E402
