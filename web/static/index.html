@@ -1,0 +1,148 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Creatica — рабочее место менеджера</title>
+<meta name="description" content="КП, расчёт доставки, документы, ткани и ценники Creatica — в браузере, без Telegram.">
+<link rel="icon" href="/static/logo.png">
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header class="topbar"><div class="in">
+  <img src="/static/logo.png" alt="Creatica" class="logo">
+  <div class="row">
+    <a class="btn small hidden" id="goApp" href="/app">Открыть кабинет →</a>
+    <button class="ghost small" data-auth="login" id="btnLogin">Войти</button>
+  </div>
+</div></header>
+
+<main class="wrap">
+  <section class="hero">
+    <div>
+      <div class="label">Для менеджеров шоу-румов</div>
+      <h1>Рабочее место менеджера Creatica</h1>
+      <p class="lead">Коммерческие предложения, расчёт доставки, заявления и выплаты, ткани и ценники — те же инструменты, что в нашем Telegram-боте, теперь в браузере на любом компьютере и телефоне.</p>
+      <div class="cta">
+        <button data-auth="register">Зарегистрироваться</button>
+        <button class="ghost" data-auth="login">У меня есть аккаунт</button>
+      </div>
+    </div>
+    <div class="hero-card" aria-hidden="true">
+      <div class="label">КП №2110-1432 · пример</div>
+      <div class="line"><span>Диван Джун, 2 части</span><span>186 000 ₽</span></div>
+      <div class="line"><span>Кресло Джун × 2</span><span>94 000 ₽</span></div>
+      <div class="line"><span>Доставка по Москве</span><span>4 500 ₽</span></div>
+      <div class="line"><span>Итого</span><span>284 500 ₽</span></div>
+    </div>
+  </section>
+
+  <div class="label" style="margin-bottom:12px">Что умеет</div>
+  <section class="features">
+    <div class="feature"><svg viewBox="0 0 24 24"><path d="M6 3h9l3 3v15H6z"/><path d="M9 9h6M9 13h6M9 17h4"/></svg>
+      <h3>Коммерческое предложение</h3><p>Позиции из прайса, фото, скидки, правка цен — готовый PDF в фирменном стиле.</p></div>
+    <div class="feature"><svg viewBox="0 0 24 24"><path d="M3 7h11v9H3zM14 10h4l3 3v3h-7"/><circle cx="7" cy="17" r="2"/><circle cx="17" cy="17" r="2"/></svg>
+      <h3>Стоимость доставки</h3><p>Москва и СПб по тарифам, подъём и сборка из прайса; регионы — по ближайшему городу.</p></div>
+    <div class="feature"><svg viewBox="0 0 24 24"><path d="M5 4h14v16H5z"/><path d="M8 8h8M8 12h8M8 16h5"/></svg>
+      <h3>Заявления</h3><p>Возврат денежных средств и выплата пени с автоматическим расчётом.</p></div>
+    <div class="feature"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><path d="M12 7v10M9.5 9.5c0-1 1-1.6 2.5-1.6s2.5.7 2.5 1.7c0 2.4-5 1.4-5 4 0 1 1 1.6 2.5 1.6s2.5-.6 2.5-1.6"/></svg>
+      <h3>Выплата дизайнеру</h3><p>Пакет документов для юрлица или расчёт перевода на карту с налогом.</p></div>
+    <div class="feature"><svg viewBox="0 0 24 24"><path d="M4 6c4-2 12-2 16 0v12c-4-2-12-2-16 0z"/><path d="M4 10c4-2 12-2 16 0"/></svg>
+      <h3>Поиск ткани</h3><p>Цена за отрез, категория и цвета в наличии у фабрики.</p></div>
+    <div class="feature"><svg viewBox="0 0 24 24"><path d="M3 12l9-9h8v8l-9 9z"/><circle cx="16" cy="8" r="1.5"/></svg>
+      <h3>Ценник на мебель</h3><p>Ценник из прайса с рассрочкой — PDF или Word для печати.</p></div>
+    <div class="feature"><svg viewBox="0 0 24 24"><path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/></svg>
+      <h3>Планируемые продажи</h3><p>Ваши сделки: стадия, сумма, что мешает — руководитель видит всё.</p></div>
+    <div class="feature"><svg viewBox="0 0 24 24"><path d="M4 5h16v14H4z"/><circle cx="9" cy="11" r="2"/><path d="M6 16c.6-1.6 1.8-2.4 3-2.4s2.4.8 3 2.4M14 9h4M14 12h4"/></svg>
+      <h3>Карточка организации</h3><p>Реквизиты ООО «Феникс» и ИП Сабиров в Word одним нажатием.</p></div>
+  </section>
+
+  <div class="label" style="margin-bottom:12px">Как начать</div>
+  <section class="steps">
+    <div class="step"><b>1</b>Зарегистрируйтесь: ФИО, телефон, шоу-рум и пароль.</div>
+    <div class="step"><b>2</b>Руководитель подтвердит доступ — обычно в течение дня.</div>
+    <div class="step"><b>3</b>Войдите и работайте: КП, доставка и документы — в одном месте.</div>
+  </section>
+</main>
+<footer class="footer"><div class="wrap">Creatica · creatica.shop · Внутренний сервис для сотрудников</div></footer>
+
+<div class="overlay hidden" id="auth">
+  <div class="modal" role="dialog" aria-modal="true" aria-label="Вход">
+    <div class="row" style="justify-content:space-between;margin-bottom:6px">
+      <img src="/static/logo.png" alt="Creatica" class="logo">
+      <button class="icon" id="authClose" aria-label="Закрыть">✕</button>
+    </div>
+    <div class="tabs"><button data-tab="login" class="on">Вход</button><button data-tab="register">Регистрация</button></div>
+
+    <form id="fLogin">
+      <label class="field"><span>Телефон</span><input name="phone" type="tel" autocomplete="username" placeholder="+7 999 123-45-67" required></label>
+      <label class="field"><span>Пароль</span><input name="password" type="password" autocomplete="current-password" required></label>
+      <div class="form-error" data-err></div>
+      <button type="submit" style="width:100%;justify-content:center">Войти</button>
+    </form>
+
+    <form id="fRegister" class="hidden">
+      <label class="field" data-f="name"><span>ФИО</span><input name="name" autocomplete="name" placeholder="Иванов Иван Иванович" required><small class="err"></small></label>
+      <label class="field" data-f="phone"><span>Телефон (будет логином)</span><input name="phone" type="tel" autocomplete="tel" placeholder="+7 999 123-45-67" required><small class="err"></small></label>
+      <label class="field" data-f="showroom"><span>Шоу-рум</span><select name="showroom" required><option value="">— выберите —</option></select><small class="err"></small></label>
+      <label class="field" data-f="telegram"><span>Telegram (необязательно)</span><input name="telegram" placeholder="@username"><small class="err"></small></label>
+      <label class="field" data-f="password"><span>Пароль (от 6 символов)</span><input name="password" type="password" autocomplete="new-password" required minlength="6"><small class="err"></small></label>
+      <div class="form-error" data-err></div>
+      <button type="submit" style="width:100%;justify-content:center">Отправить заявку</button>
+      <p class="muted" style="font-size:13px;margin-top:10px">После регистрации заявка уйдёт руководителю. Как только он подтвердит доступ — все функции откроются.</p>
+    </form>
+  </div>
+</div>
+
+<script>
+(function () {
+  const $ = (s, r = document) => r.querySelector(s);
+  const overlay = $("#auth");
+  function tab(name) {
+    document.querySelectorAll("[data-tab]").forEach(b => b.classList.toggle("on", b.dataset.tab === name));
+    $("#fLogin").classList.toggle("hidden", name !== "login");
+    $("#fRegister").classList.toggle("hidden", name !== "register");
+  }
+  function open(name) { tab(name); overlay.classList.remove("hidden"); setTimeout(() => (name === "login" ? $("#fLogin [name=phone]") : $("#fRegister [name=name]")).focus(), 30); }
+  document.querySelectorAll("[data-auth]").forEach(b => b.addEventListener("click", () => open(b.dataset.auth)));
+  document.querySelectorAll("[data-tab]").forEach(b => b.addEventListener("click", () => tab(b.dataset.tab)));
+  $("#authClose").onclick = () => overlay.classList.add("hidden");
+  overlay.addEventListener("click", e => { if (e.target === overlay) overlay.classList.add("hidden"); });
+  document.addEventListener("keydown", e => { if (e.key === "Escape") overlay.classList.add("hidden"); });
+
+  async function post(url, body) {
+    const r = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), credentials: "same-origin" });
+    let data = {}; try { data = await r.json(); } catch (e) {}
+    return { ok: r.ok, data };
+  }
+  function busy(form, on) { const b = form.querySelector("button[type=submit]"); b.disabled = on; b.dataset.t = b.dataset.t || b.textContent; b.innerHTML = on ? '<span class="spin"></span>' : b.dataset.t; }
+
+  $("#fLogin").addEventListener("submit", async e => {
+    e.preventDefault(); const f = e.target; busy(f, true);
+    const { ok, data } = await post("/api/login", Object.fromEntries(new FormData(f)));
+    busy(f, false);
+    if (ok) location.href = "/app"; else f.querySelector("[data-err]").textContent = data.error || "Не получилось войти.";
+  });
+  $("#fRegister").addEventListener("submit", async e => {
+    e.preventDefault(); const f = e.target; busy(f, true);
+    f.querySelectorAll(".field").forEach(x => { x.classList.remove("bad"); x.querySelector(".err").textContent = ""; });
+    f.querySelector("[data-err]").textContent = "";
+    const { ok, data } = await post("/api/register", Object.fromEntries(new FormData(f)));
+    busy(f, false);
+    if (ok) { location.href = "/app"; return; }
+    if (data.errors) for (const [k, v] of Object.entries(data.errors)) { const x = f.querySelector(`[data-f=${k}]`); if (x) { x.classList.add("bad"); x.querySelector(".err").textContent = v; } }
+    else f.querySelector("[data-err]").textContent = data.error || "Не получилось зарегистрироваться.";
+  });
+
+  fetch("/api/showrooms").then(r => r.json()).then(d => {
+    const s = $("#fRegister [name=showroom]");
+    d.showrooms.forEach(x => s.add(new Option(x, x)));
+  }).catch(() => {});
+  fetch("/api/me", { credentials: "same-origin" }).then(r => r.json()).then(d => {
+    if (d.user) { $("#goApp").classList.remove("hidden"); $("#btnLogin").classList.add("hidden"); }
+  }).catch(() => {});
+  if (location.hash === "#login" || location.hash === "#register") open(location.hash.slice(1));
+})();
+</script>
+</body>
+</html>

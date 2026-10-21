@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Creatica — кабинет</title>
+<link rel="icon" href="/static/logo.png">
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<div class="mobilebar">
+  <img src="/static/logo.png" alt="Creatica" class="logo">
+  <button class="ghost small" id="menuBtn">☰ Меню</button>
+</div>
+<div class="app">
+  <aside class="side" id="side">
+    <div class="row" style="justify-content:space-between">
+      <img src="/static/logo.png" alt="Creatica" class="logo">
+      <button class="icon hidden" id="menuClose" aria-label="Закрыть">✕</button>
+    </div>
+    <nav class="nav" id="nav"></nav>
+    <div class="me panel" id="me"></div>
+  </aside>
+  <main class="main" id="view"><div class="empty"><span class="spin"></span></div></main>
+</div>
+<script src="/static/app.js"></script>
+</body>
+</html>

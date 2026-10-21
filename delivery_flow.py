@@ -491,7 +491,7 @@ async def _search_item(message: types.Message, state: FSMContext, query: str) ->
     found = [
         {"title": it.title, "category": SOURCE_CATEGORY.get(it.source, "big"), "asm": int(it.assembly or 0),
          "size": "x".join(str(v) for v in it.dims) if it.dims else it.size_raw,
-         "dims": list(it.dims) if it.dims else None}
+         "dims": list(it.dims) if it.dims else None, "parts": it.parts}
         for it in items
     ]
     await state.update_data(last_query=query)

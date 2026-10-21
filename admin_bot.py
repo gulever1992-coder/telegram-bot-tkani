@@ -509,3 +509,20 @@ for _name, _kind in (("stats", "sum"), ("managers", "mgr"), ("rooms", "room"), (
 router.message.register(on_admin_button, F.text.in_(ADMIN_TEXT.keys()))
 # любой другой текст (не команда) — поиск КП по менеджеру / шоу-руму / заказчику / номеру
 router.message.register(_search, F.text, ~F.text.startswith("/"))
+
+
+# --- канал для данных сайта: владелец добавил админ-бота администратором — сообщаем id канала ------
+
+
+@router.my_chat_member()
+async def on_added_to_chat(event: types.ChatMemberUpdated, bot: Bot) -> None:
+    if event.chat.type not in ("channel", "group", "supergroup") or not _allowed(event.from_user):
+        return
+    if event.new_chat_member.status != "administrator":
+        return
+    await bot.send_message(
+        event.from_user.id,
+        f"✅ Админ-бот добавлен администратором в «{escape(event.chat.title or '')}».\n\n"
+        f"ID для сайта (переменная <b>WEB_STORE_CHAT</b>):\n<code>{event.chat.id}</code>\n\n"
+        "Здесь сайт будет хранить свои данные — не удаляйте канал и закреплённое в нём сообщение.",
+    )
