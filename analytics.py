@@ -40,6 +40,7 @@ KINDS = {
 }
 
 EVENTS: list[dict] = []
+DRAFTS: dict[str, dict] = {}  # черновики КП по uid — хранятся в том же журнале, переживают перезапуск
 _admin_bot: Bot | None = None
 _store_msg_id: int | None = None
 _persist_task: asyncio.Task | None = None
@@ -148,6 +149,29 @@ def _split(text: str, limit: int) -> list[str]:
     return chunks or [text]
 
 
+def save_draft(uid: int, draft: dict) -> None:
+    DRAFTS[str(uid)] = {"ts": int(time.time()), "data": draft}
+    _changed()
+
+
+def get_draft(uid: int) -> dict | None:
+    return DRAFTS.get(str(uid))
+
+
+def drop_draft(uid: int) -> None:
+    if DRAFTS.pop(str(uid), None) is not None:
+        _changed()
+
+
+def _changed() -> None:
+    if not enabled():
+        return
+    try:
+        _persist_soon()
+    except RuntimeError:  # нет запущенного цикла (тесты)
+        pass
+
+
 def _persist_soon(delay: float = 8.0) -> None:
     global _persist_task
     if _persist_task and not _persist_task.done():
@@ -164,7 +188,10 @@ def _persist_soon(delay: float = 8.0) -> None:
 
 
 def _dump() -> bytes:
-    return "\n".join(json.dumps(e, ensure_ascii=False) for e in EVENTS).encode("utf-8")
+    lines = [json.dumps(e, ensure_ascii=False) for e in EVENTS]
+    if DRAFTS:
+        lines.append(json.dumps({"_drafts": DRAFTS}, ensure_ascii=False))
+    return "\n".join(lines).encode("utf-8")
 
 
 async def persist() -> None:
@@ -217,7 +244,11 @@ async def load() -> int:
         loaded = []
         for line in buf.getvalue().decode("utf-8").splitlines():
             if line.strip():
-                loaded.append(json.loads(line))
+                obj = json.loads(line)
+                if "_drafts" in obj:
+                    DRAFTS.update(obj["_drafts"])
+                else:
+                    loaded.append(obj)
         EVENTS[:0] = loaded
         _store_msg_id = pinned.message_id
         return len(loaded)

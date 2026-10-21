@@ -10,7 +10,7 @@ import logging
 import re
 from dataclasses import asdict
 
-from aiogram import F, Router, types
+from aiogram import BaseMiddleware, F, Router, types
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import BufferedInputFile, InlineKeyboardButton
@@ -91,8 +91,10 @@ def _json_safe(k: dict) -> dict:
 
     def item_safe(it: dict) -> dict:
         base = {f: it[f] for f in ("title", "qty", "size", "material", "link", "unit_price", "discount")}
+        base["photo_id"] = it.get("photo_id")
         base["alt"] = (
-            {f: it["alt"][f] for f in ("title", "size", "material", "link", "unit_price")}
+            {**{f: it["alt"][f] for f in ("title", "size", "material", "link", "unit_price")},
+             "photo_id": it["alt"].get("photo_id")}
             if it.get("alt") else None
         )
         return base
@@ -113,13 +115,83 @@ def _from_history(uid: int, st: dict) -> dict:
     items = []
     for it in st.get("items", []):
         item = {**_item_new(), **{f: it[f] for f in ("title", "qty", "size", "material", "link", "unit_price", "discount")}}
+        item["photo_id"] = it.get("photo_id")
         if it.get("alt"):
             a = it["alt"]
             item["alt"] = {"title": a["title"], "size": a["size"], "material": a["material"], "link": a["link"],
-                           "unit_price": a["unit_price"], "photo": None, "default": {}}
+                           "unit_price": a["unit_price"], "photo": None, "photo_id": a.get("photo_id"), "default": {}}
         items.append(item)
     k["items"] = items
     return k
+
+
+# --- автосохранение черновика: переживает перезапуск бота ---------------------------------
+
+_DRAFT_KEYS = ("kp", "cur", "queue", "mode", "edit_index", "terms_done", "results")
+
+
+def _strip_bytes(x):
+    """Копия без байтов (фото) — для JSON; фото восстанавливаем по photo_id."""
+    if isinstance(x, dict):
+        return {k: _strip_bytes(v) for k, v in x.items()}
+    if isinstance(x, (list, tuple)):
+        return [_strip_bytes(v) for v in x]
+    return None if isinstance(x, (bytes, bytearray)) else x
+
+
+async def _photo_by_id(bot, file_id: str | None) -> bytes | None:
+    if not file_id:
+        return None
+    try:
+        buf = io.BytesIO()
+        await bot.download(file_id, destination=buf)
+        return prep_photo(buf.getvalue())
+    except Exception:  # noqa: BLE001 — фото не вернулось, позиция остаётся без него
+        log.warning("не удалось вернуть фото %s", file_id)
+        return None
+
+
+async def _load_photos(bot, *items: dict | None) -> int:
+    """Докачивает фото позиций (и их альтернатив) по photo_id. Возвращает, сколько не удалось вернуть."""
+    lost = 0
+    for it in items:
+        for t in (it, (it or {}).get("alt")):
+            if t and t.get("photo_id") and not t.get("photo"):
+                t["photo"] = await _photo_by_id(bot, t["photo_id"])
+                lost += t["photo"] is None
+    return lost
+
+
+def _draft_title(d: dict) -> str:
+    k = d["data"].get("kp") or {}
+    when = dt.datetime.fromtimestamp(d["ts"], MSK).strftime("%d.%m %H:%M")
+    n = len(k.get("items") or [])
+    return f"{k.get('customer') or 'без заказчика'} · позиций: {n} · сохранено {when}"
+
+
+class _AutoSave(BaseMiddleware):
+    """После каждого шага КП кладёт состояние в черновик (журнал в админ-боте)."""
+
+    async def __call__(self, handler, event, data):
+        result = await handler(event, data)
+        state: FSMContext | None = data.get("state")
+        user = data.get("event_from_user")
+        if state is None or user is None:
+            return result
+        try:
+            if await state.get_state() == KPForm.run.state:
+                d = await state.get_data()
+                if d.get("mode") == "issued":
+                    analytics.drop_draft(user.id)
+                elif d.get("kp"):
+                    analytics.save_draft(user.id, _strip_bytes({key: d.get(key) for key in _DRAFT_KEYS}))
+        except Exception:  # noqa: BLE001 — автосохранение не должно ломать КП
+            log.exception("автосохранение КП")
+        return result
+
+
+router.message.middleware(_AutoSave())
+router.callback_query.middleware(_AutoSave())
 
 
 def _dims(item: pricelist.Item) -> str:
@@ -190,7 +262,8 @@ def _prompt(step: str, k: dict, c: dict) -> tuple[str, list[tuple[str, str]], st
         return pre + "🔗 Ссылка на изделие на сайте (URL):", [], skip
     if base == "price":
         btn = [(f"✅ По прайсу «от»: {rub(default['price'])}", "keep")] if default.get("price") else []
-        return pre + "💰 Цена за 1 шт, руб.:", btn, None
+        now = f"\nСейчас: {rub(t['unit_price'])}" if isinstance(t, dict) and t.get("unit_price") else ""
+        return pre + "💰 Цена за 1 шт, руб.:" + now, btn, None
     if base == "discount":
         return "🏷 Скидка, % (число):", [(f"{v}%", str(v)) for v in (0, 3, 5, 10)], None
     if base == "photo":
@@ -250,6 +323,10 @@ async def _next(target: types.Message, state: FSMContext, uid: int) -> None:
         if 0 <= i < len(k["items"]):
             k["items"][i] = c
         await state.update_data(kp=k, cur=None)
+        if not data.get("terms_done"):  # ещё добавляем позиции — возвращаемся к «добавить ещё?»
+            await state.update_data(mode="more", queue=[])
+            await _more_menu(target, k, f"✔ Позиция {i + 1} обновлена: {_item_line(i + 1, k['items'][i])}")
+            return
         await target.answer(f"✔ Позиция {i + 1} обновлена.")
         await _preview(target, state)
     else:  # terms | edit
@@ -264,16 +341,18 @@ async def _start_item(target: types.Message, state: FSMContext) -> None:
     await _next(target, state, target.chat.id)
 
 
-async def _more_menu(target: types.Message, k: dict) -> None:
+async def _more_menu(target: types.Message, k: dict, head: str | None = None) -> None:
     b = InlineKeyboardBuilder()
     b.row(InlineKeyboardButton(text="➕ Добавить ещё позицию", callback_data="kp:more:add"))
     b.row(InlineKeyboardButton(text="✅ Позиций достаточно", callback_data="kp:more:done"))
+    b.row(InlineKeyboardButton(text="💰 Изменить цену", callback_data="kp:prices"),
+          InlineKeyboardButton(text="✏ Изменить позицию", callback_data="kp:items"))
     b.row(InlineKeyboardButton(text="✖ Отмена", callback_data="menu:home"))
     last = k["items"][-1]
-    await target.answer(
-        f"✔ Добавлено: <b>{last['title']}</b> — {last['qty']} шт. Позиций в КП: {len(k['items'])}.",
-        reply_markup=b.as_markup(),
-    )
+    if head is None:
+        head = (f"✔ Добавлено: <b>{last['title']}</b> — {last['qty']} шт × {rub(last.get('unit_price') or 0)}"
+                + (f", −{last['discount']:g}%" if last.get("discount") else "") + ".")
+    await target.answer(f"{head}\nПозиций в КП: {len(k['items'])}.", reply_markup=b.as_markup())
 
 
 async def _pay_screen(target: types.Message, k: dict, edit: bool = False) -> None:
@@ -394,8 +473,61 @@ async def _answer(target: types.Message, state: FSMContext, uid: int, value: str
 # --- вход ----------------------------------------------------------------------------
 
 
+def _draft_markup() -> types.InlineKeyboardMarkup:
+    b = InlineKeyboardBuilder()
+    b.row(InlineKeyboardButton(text="▶ Продолжить черновик", callback_data="kpd:resume"))
+    b.row(InlineKeyboardButton(text="🆕 Начать новое КП", callback_data="kpd:new"))
+    b.row(InlineKeyboardButton(text="🏠 В главное меню", callback_data="menu:home"))
+    return b.as_markup()
+
+
 @router.callback_query(F.data == "menu:kp")
 async def cb_kp(call: types.CallbackQuery, state: FSMContext) -> None:
+    draft = analytics.get_draft(call.from_user.id)
+    if draft and ((draft["data"].get("kp") or {}).get("items") or (draft["data"].get("cur") or {}).get("title")):
+        await call.answer()
+        await call.message.answer(
+            f"💾 <b>Есть несохранённое КП</b>\n{_draft_title(draft)}\n\nПродолжить с того же места?",
+            reply_markup=_draft_markup())
+        return
+    await _start_new(call, state)
+
+
+@router.callback_query(F.data == "kpd:new")
+async def cb_draft_new(call: types.CallbackQuery, state: FSMContext) -> None:
+    analytics.drop_draft(call.from_user.id)
+    await _start_new(call, state)
+
+
+@router.callback_query(F.data == "kpd:resume")
+async def cb_draft_resume(call: types.CallbackQuery, state: FSMContext) -> None:
+    draft = analytics.get_draft(call.from_user.id)
+    if not draft:
+        await call.answer("Черновик не найден", show_alert=True)
+        return
+    await call.answer("Восстанавливаю…")
+    d = copy.deepcopy(draft["data"])
+    k, c = d["kp"], d.get("cur")
+    lost = await _load_photos(call.bot, *k["items"], c)
+    await state.clear()
+    await state.set_state(KPForm.run)
+    await state.update_data({**{key: d.get(key) for key in _DRAFT_KEYS},
+                             "queue": d.get("queue") or [], "mode": d.get("mode") or "preview"})
+    note = f"\n⚠ Фото не удалось вернуть: {lost} — пришлите заново." if lost else ""
+    await call.message.answer(f"💾 Черновик восстановлен.{note}")
+    queue, mode = d.get("queue") or [], d.get("mode")
+    if queue and queue[0] in ("pick", "alt_pick"):  # список найденного не восстановить — ищем заново
+        queue[0] = "alt_query" if queue[0] == "alt_pick" else "query"
+        await state.update_data(queue=queue)
+    if queue:
+        await _next(call.message, state, call.from_user.id)
+    elif mode == "more" and k["items"]:
+        await _more_menu(call.message, k)
+    else:
+        await _preview(call.message, state)
+
+
+async def _start_new(call: types.CallbackQuery, state: FSMContext) -> None:
     await state.clear()
     await state.set_state(KPForm.run)
     await state.update_data(kp=_kp_new(profiles.get(call.from_user.id)), queue=list(HEAD), mode="head", cur=None, terms_done=False)
@@ -533,18 +665,18 @@ async def cb_pick(call: types.CallbackQuery, state: FSMContext) -> None:
 # --- фото --------------------------------------------------------------------------
 
 
-async def _fetch(message: types.Message) -> bytes | None:
-    """Скачивает присланное фото/картинку. None — если это не картинка."""
+async def _fetch(message: types.Message) -> tuple[bytes | None, str | None]:
+    """Скачивает присланное фото/картинку: (байты, file_id). (None, None) — если это не картинка."""
     file = None
     if message.photo:
         file = message.photo[-1]
     elif message.document and (message.document.mime_type or "").startswith("image/"):
         file = message.document
     if file is None:
-        return None
+        return None, None
     buf = io.BytesIO()
     await message.bot.download(file, destination=buf)
-    return buf.getvalue()
+    return buf.getvalue(), file.file_id
 
 
 @router.message(KPForm.run, F.photo | F.document)
@@ -554,13 +686,14 @@ async def msg_photo(message: types.Message, state: FSMContext) -> None:
     if not queue or queue[0] not in ("photo", "alt_photo"):
         await message.answer("Сейчас фото не требуется — ответьте на вопрос выше.")
         return
-    raw = await _fetch(message)
+    raw, file_id = await _fetch(message)
     jpeg = prep_photo(raw)
     if not jpeg:
         await message.answer("Не получилось прочитать картинку. Пришлите фото ещё раз или нажмите «Пропустить».")
         return
     c = data["cur"]
-    _target(c, queue[0].startswith("alt_"))["photo"] = jpeg
+    t = _target(c, queue[0].startswith("alt_"))
+    t["photo"], t["photo_id"] = jpeg, file_id  # file_id — чтобы вернуть фото после перезапуска бота
     queue.pop(0)
     await state.update_data(cur=c, queue=queue)
     await _next(message, state, message.from_user.id)
@@ -668,9 +801,10 @@ def _preview_markup() -> types.InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
     b.row(InlineKeyboardButton(text="📄 Получить PDF", callback_data="kp:make"))
     b.row(
-        InlineKeyboardButton(text="✏ Изменить позицию", callback_data="kp:items"),
+        InlineKeyboardButton(text="💰 Цены", callback_data="kp:prices"),
         InlineKeyboardButton(text="➕ Позиция", callback_data="kp:addmore"),
     )
+    b.row(InlineKeyboardButton(text="✏ Изменить позицию", callback_data="kp:items"))
     b.row(
         InlineKeyboardButton(text="✏ Заказчик / менеджер", callback_data="kp:editcust"),
         InlineKeyboardButton(text="✏ Условия", callback_data="kp:editterms"),
@@ -749,6 +883,28 @@ async def cb_items(call: types.CallbackQuery, state: FSMContext) -> None:
     b.row(InlineKeyboardButton(text="⬅ Назад к КП", callback_data="kp:back"))
     await call.message.answer("Какую позицию изменить?\n\n" + "\n".join(
         _item_line(i + 1, it) for i, it in enumerate(k["items"])), reply_markup=b.as_markup())
+
+
+@router.callback_query(F.data == "kp:prices", KPForm.run)
+async def cb_prices(call: types.CallbackQuery, state: FSMContext) -> None:
+    """Быстрая правка цены: позиция -> сразу вопрос «цена за 1 шт»."""
+    k = (await state.get_data())["kp"]
+    await call.answer()
+    if not k["items"]:
+        await call.message.answer("Позиций пока нет.")
+        return
+    price_j = next(j for j, (_, steps) in enumerate(ITEM_FIELDS) if steps == ["price"])
+    b = InlineKeyboardBuilder()
+    for i, it in enumerate(k["items"]):
+        b.row(InlineKeyboardButton(
+            text=f"{i + 1}. {(it['title'] or 'Без названия')[:30]} — {rub(it.get('unit_price') or 0)}",
+            callback_data=f"kp:itf:{i}:{price_j}"))
+        if it.get("alt"):
+            b.row(InlineKeyboardButton(
+                text=f"   🅱 альтернатива — {rub(it['alt'].get('unit_price') or 0)}",
+                callback_data=f"kp:itf:{i}:{len(ITEM_FIELDS)}"))  # ALT_FIELDS[0] — цена альтернативы
+    b.row(InlineKeyboardButton(text="⬅ Назад", callback_data="kp:back"))
+    await call.message.answer("💰 У какой позиции поменять цену?", reply_markup=b.as_markup())
 
 
 @router.callback_query(F.data.startswith("kp:it:"), KPForm.run)
@@ -844,6 +1000,7 @@ async def cb_make(call: types.CallbackQuery, state: FSMContext) -> None:
         await call.answer("Добавьте хотя бы одну позицию", show_alert=True)
         return
     await call.answer("Готовлю PDF…")
+    await state.update_data(mode="issued")  # КП выпущено — черновик больше не нужен (оно в «Мои КП»)
     kp = _build(k)
     pdf = build_kp_pdf(kp)
     filename = f"KP_Creatica_{kp.number}.pdf"
@@ -946,6 +1103,11 @@ async def _send_fabric_info(target: types.Message, k: dict) -> None:
 @router.callback_query(F.data == "kp:back", KPForm.run)
 async def cb_back(call: types.CallbackQuery, state: FSMContext) -> None:
     await call.answer()
+    data = await state.get_data()
+    if not data.get("terms_done") and data["kp"]["items"]:  # КП ещё собирается — назад к «добавить ещё?»
+        await state.update_data(mode="more", queue=[], cur=None)
+        await _more_menu(call.message, data["kp"], "Продолжаем.")
+        return
     await _preview(call.message, state)
 
 
@@ -1067,11 +1229,30 @@ async def cb_hist_open(call: types.CallbackQuery, state: FSMContext) -> None:
         await call.answer("Список устарел, откройте «Мои КП» заново", show_alert=True)
         return
     k = _from_history(call.from_user.id, mine[idx]["data"]["state"])
+    await call.answer("Открываю…")
+    lost = await _load_photos(call.bot, *k["items"])
+    no_photo = sum(1 for it in k["items"] if not it.get("photo_id"))  # КП, выпущенные до сохранения фото
     await state.set_state(KPForm.run)
     await state.update_data(kp=k, cur=None, mode="preview", queue=[], terms_done=True)
+    note = "✏ Открыто для правки."
+    if lost or no_photo:
+        note += (" У части позиций нет фото — при необходимости пришлите заново: "
+                 "«✏ Изменить позицию» → «Фото».")
+    await call.message.answer(note)
+    await _preview(call.message, state)
+
+
+# --- кнопки старого КП после перезапуска бота (состояние потеряно) — предлагаем черновик ---------
+# регистрируется последним: сюда попадают только «kp:…», которые никто выше не обработал
+
+
+@router.callback_query(F.data.startswith("kp:"))
+async def cb_kp_stale(call: types.CallbackQuery, state: FSMContext) -> None:
+    draft = analytics.get_draft(call.from_user.id)
+    if not draft:
+        await call.answer("Эта кнопка устарела — начните КП заново из меню", show_alert=True)
+        return
     await call.answer()
     await call.message.answer(
-        "✏ Открыто для правки. Фото позиций пришлось сбросить — при необходимости пришлите заново "
-        "(удалите позицию и добавьте её снова с фото)."
-    )
-    await _preview(call.message, state)
+        f"🔄 Бот перезапускался, но КП сохранилось.\n{_draft_title(draft)}\n\nПродолжить с того же места?",
+        reply_markup=_draft_markup())
