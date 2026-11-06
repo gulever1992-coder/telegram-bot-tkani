@@ -598,7 +598,7 @@ async def pay_date(message: types.Message, state: FSMContext) -> None:
     await _finish(message, state, date)
 
 
-# --- Выплата физ. лицу: перевод на карту, расчёт с налогом 13% за вывод -----
+# --- Выплата физ. лицу: перевод на карту, расчёт с налогом 20% за вывод -----
 
 
 class PersonPayForm(StatesGroup):
@@ -609,7 +609,7 @@ class PersonPayForm(StatesGroup):
     discount = State()
 
 
-PERSON_TAX = 0.13  # налог за вывод денег физ. лица
+PERSON_TAX = 0.20  # налог за вывод денег физ. лица
 
 
 def _money(value: float) -> str:
@@ -723,7 +723,7 @@ async def person_discount(message: types.Message, state: FSMContext) -> None:
         f"Сумма заказа: {_money(d['amount'])} ₽\n\n"
         f"Процент дизайнера: {_money(value)} %\n"
         f"Вознаграждение: {_money(reward)} ₽\n"
-        f"Налог за вывод (13%): −{_money(tax)} ₽\n"
+        f"Налог за вывод (20%): −{_money(tax)} ₽\n"
         f"<b>К переводу на карту: {_money(payout)} ₽</b>"
     )
     analytics.notify(f"💵 <b>Выплата дизайнеру — перевод на карту</b>\n{analytics.who(message.chat.id)}\n\n{body}")

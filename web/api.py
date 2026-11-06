@@ -609,14 +609,14 @@ async def payout_person(request: web.Request) -> web.Response:
     if pct is None or not 0 < pct <= 100:
         return web.json_response({"errors": {"discount": "Процент от 1 до 100."}}, status=422)
     reward = amount * pct / 100
-    tax = reward * 0.13
+    tax = reward * 0.20
     res = {"reward": round(reward, 2), "tax": round(tax, 2), "payout": round(reward - tax, 2)}
     esc = html.escape
     notify.text(
         f"💵 <b>Выплата дизайнеру — перевод на карту</b>\n{notify.who(user)}\n\n"
         f"Заказ / клиент: {esc(str(b.get('order_name') or '-'))}\nДизайнер: {esc(str(b.get('designer') or '-'))}\n"
         f"Банк получателя: {esc(str(b.get('bank') or '-'))}\nСумма заказа: {money(amount)}\n\n"
-        f"Процент дизайнера: {pct:g} %\nВознаграждение: {money(reward)}\nНалог за вывод (13%): −{money(tax)}\n"
+        f"Процент дизайнера: {pct:g} %\nВознаграждение: {money(reward)}\nНалог за вывод (20%): −{money(tax)}\n"
         f"<b>К переводу на карту: {money(reward - tax)}</b>")
     return web.json_response(res)
 

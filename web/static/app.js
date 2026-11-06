@@ -703,12 +703,12 @@ async function viewPayout() {
       const d = await api("POST", "/api/payout/person", a);
       out.replaceChildren(h("div", { class: "card calc-lines" },
         h("div", { class: "line" }, h("span", { text: "Вознаграждение" }), h("b", { text: money(d.reward) })),
-        h("div", { class: "line" }, h("span", { text: "Налог за вывод (13%)" }), h("b", { text: "−" + money(d.tax) })),
+        h("div", { class: "line" }, h("span", { text: "Налог за вывод (20%)" }), h("b", { text: "−" + money(d.tax) })),
         h("div", { class: "line total" }, h("span", { text: "К переводу на карту" }), h("span", { text: money(d.payout) })),
         h("p", { class: "muted", style: "font-size:13px;margin:8px 0 0", text: "Расчёт ушёл руководителю." })));
     } catch (e) { if (e.data && e.data.errors) showErrors(form, e.data.errors); throw e; }
   }).catch(() => {}) });
-  page("Выплата дизайнеру", "Перевод на карту физлицу: вознаграждение = сумма заказа × процент, минус 13%.", tabs, form, go, h("div", { style: "height:14px" }), out);
+  page("Выплата дизайнеру", "Перевод на карту физлицу: вознаграждение = сумма заказа × процент, минус 20%.", tabs, form, go, h("div", { style: "height:14px" }), out);
 }
 
 // =================================================================================================
