@@ -1159,6 +1159,7 @@ def _find_event(uid: int, ts: int, number) -> dict | None:
 
 def _close_kp(ev: dict, outcome: str, reason: str = "") -> None:
     ev["data"]["closed"] = outcome
+    ev["data"]["closed_ts"] = int(dt.datetime.now(MSK).timestamp())
     if reason:
         ev["data"]["lost_reason"] = reason
     analytics._persist_soon()

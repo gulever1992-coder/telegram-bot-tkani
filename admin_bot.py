@@ -63,6 +63,7 @@ def menu_markup(period: str = "7") -> types.InlineKeyboardMarkup:
           InlineKeyboardButton(text="📈 По дням", callback_data=f"a:days:{period}"))
     b.row(InlineKeyboardButton(text="🔍 КП по менеджеру", callback_data=f"a:fm:{period}"),
           InlineKeyboardButton(text="🔍 КП по шоу-руму", callback_data=f"a:fr:{period}"))
+    b.row(InlineKeyboardButton(text="📂 КП менеджера: в работе / купили / отказ", callback_data="a:stl"))
     return b.as_markup()
 
 
@@ -369,6 +370,96 @@ def _picker(kind: str, period: str) -> tuple[str, types.InlineKeyboardMarkup]:
     return text, b.as_markup()
 
 
+# --- КП менеджера по статусам: в работе / купили / отказались ------------------------------------
+
+STATUS_LABEL = {"open": "🟡 В работе", "won": "✅ Купили", "lost": "❌ Отказались"}
+
+
+def _kp_status(e: dict) -> str:
+    closed = e["data"].get("closed")
+    return closed if closed in ("won", "lost") else "open"
+
+
+def _status_picker() -> tuple[str, types.InlineKeyboardMarkup]:
+    by: dict[int, list[dict]] = defaultdict(list)
+    for e in kp_events("all"):
+        by[e["uid"]].append(e)
+    b = InlineKeyboardBuilder()
+    rows = sorted(by.items(), key=lambda kv: -sum(_kp_status(e) == "open" for e in kv[1]))
+    for uid, evs in rows[:40]:
+        c = Counter(_kp_status(e) for e in evs)
+        b.row(InlineKeyboardButton(text=f"{who(evs[0])} — 🟡{c['open']} ✅{c['won']} ❌{c['lost']}",
+                                   callback_data=f"a:st:{uid}"))
+    text = ("📂 <b>КП менеджеров по статусам</b>\nВыберите менеджера — покажу все его КП: "
+            "🟡 в работе (клиент думает), ✅ купили, ❌ отказались." if rows else "КП пока не оформляли.")
+    return text, b.as_markup()
+
+
+def _status_text(uid: int) -> str:
+    evs = kp_events("all", uid=uid)
+    if not evs:
+        return "У этого менеджера нет КП."
+    groups = {k: [e for e in evs if _kp_status(e) == k] for k in STATUS_LABEL}
+    lines = [f"📂 <b>КП менеджера {who(evs[0])}</b>"]
+    for key, label in STATUS_LABEL.items():
+        g = groups[key]
+        lines.append(f"\n<b>{label}: {len(g)}</b> на {rub(sum(e['data'].get('sum', 0) for e in g))}")
+        limit = 20 if key == "open" else 10
+        for e in g[:limit]:
+            d = e["data"]
+            when = fmt_time(d["closed_ts"]) if d.get("closed_ts") else fmt_time(e["ts"])
+            line = (f"• {when} · №{escape(str(d.get('number', '')))} · "
+                    f"{escape(str(d.get('customer') or 'без заказчика'))} · {rub(d.get('sum', 0))}")
+            if key == "lost" and d.get("lost_reason"):
+                line += f"\n   причина: {escape(str(d['lost_reason']))[:120]}"
+            lines.append(line)
+        if len(g) > limit:
+            lines.append(f"<i>…и ещё {len(g) - limit}</i>")
+    lines.append("\n<i>Дата у закрытых — когда менеджер отметил результат, у остальных — когда выпущено КП.</i>")
+    return "\n".join(lines)[:4000]
+
+
+def _status_markup(uid: int) -> types.InlineKeyboardMarkup:
+    evs = kp_events("all", uid=uid)
+    b = InlineKeyboardBuilder()
+    for key, label in STATUS_LABEL.items():
+        n = sum(1 for e in evs if _kp_status(e) == key and e["data"].get("msg"))
+        if n:
+            b.row(InlineKeyboardButton(text=f"📎 Файлы: {label.lower()} ({min(n, MAX_FILES)})",
+                                       callback_data=f"a:sf:{uid}:{key}"))
+    b.row(InlineKeyboardButton(text="⬅ Менеджеры", callback_data="a:stl"))
+    return b.as_markup()
+
+
+@router.callback_query(F.data.regexp(r"^a:st"))
+async def cb_status(call: types.CallbackQuery) -> None:
+    if not _allowed(call.from_user):
+        await call.answer("Доступ закрыт", show_alert=True)
+        return
+    if call.data == "a:stl":
+        text, markup = _status_picker()
+    else:
+        uid = int(call.data.split(":")[2])
+        text, markup = _status_text(uid), _status_markup(uid)
+    try:
+        await call.message.edit_text(text, reply_markup=markup)
+    except Exception:  # noqa: BLE001 — содержимое не изменилось
+        pass
+    await call.answer()
+
+
+@router.callback_query(F.data.regexp(r"^a:sf:"))
+async def cb_status_files(call: types.CallbackQuery) -> None:
+    if not _allowed(call.from_user):
+        await call.answer("Доступ закрыт", show_alert=True)
+        return
+    _, _, uid, key = call.data.split(":")
+    events = [e for e in kp_events("all", uid=int(uid)) if _kp_status(e) == key]
+    await call.answer("Присылаю файлы…")
+    if not await _send_files(call, events):
+        await call.message.answer("Файлы этих КП недоступны (старые записи или сообщения удалены из чата).")
+
+
 # --- постоянное меню под полем ввода (две колонки) -------------------------------------------------
 
 ADMIN_MENU = [
@@ -377,7 +468,7 @@ ADMIN_MENU = [
     ("🔍 КП по менеджеру", "fm"), ("🔍 КП по шоу-руму", "fr"),
     ("🕒 Лента действий", "feed"), ("📈 По дням", "days"),
     ("📅 Период отчётов", "period"), ("🌅 Сводка за вчера", "digest"),
-    ("ℹ Помощь", "help"),
+    ("📂 КП менеджера: статусы", "status"), ("ℹ Помощь", "help"),
 ]
 ADMIN_TEXT = dict(ADMIN_MENU)
 PERIOD: dict[int, str] = {}  # выбранный период отчётов у каждого владельца
@@ -402,6 +493,9 @@ async def on_admin_button(message: types.Message) -> None:
     elif kind == "period":
         await message.answer(f"📅 Период отчётов сейчас: <b>{PERIODS[period][0]}</b>. Выберите другой:",
                              reply_markup=menu_markup(period))
+    elif kind == "status":
+        text, markup = _status_picker()
+        await message.answer(text, reply_markup=markup)
     elif kind in ("fm", "fr"):
         text, markup = _picker(kind, period)
         await message.answer(text, reply_markup=markup)
