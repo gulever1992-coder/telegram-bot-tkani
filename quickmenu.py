@@ -50,6 +50,7 @@ async def on_menu_button(message: types.Message, state: FSMContext) -> None:
     call = _Call(message)
 
     # импорт внутри функции — чтобы не было циклов между модулями
+    import claim_flow
     import company_flow
     import core
     import delivery_flow
@@ -72,6 +73,7 @@ async def on_menu_button(message: types.Message, state: FSMContext) -> None:
         "pipeline": pipeline_flow.cb_pipeline,
         "delivery": delivery_flow.cb_delivery,
         "cards": company_flow.cb_cards,
+        "claim": claim_flow.cb_claim,
         "profile": onboarding.cb_profile,
     }
     await handlers[key](call, state)

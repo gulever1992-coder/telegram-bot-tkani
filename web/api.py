@@ -23,7 +23,7 @@ from utils.kp import PAYMENTS, build_kp_pdf, build_kp_preview, prep_photo, rub
 from utils.refund import REFUND_COMPANIES, build_refund_branded
 from utils.statement import money
 from utils.tag import Tag, build_tag_docx, build_tag_pdf, build_tag_preview
-from web import notify
+from web import auth, notify
 from web.store import Store, now
 
 log = logging.getLogger("web.api")
@@ -608,6 +608,9 @@ async def payout_person(request: web.Request) -> web.Response:
         return web.json_response({"errors": {"amount": "Введите сумму заказа."}}, status=422)
     if pct is None or not 0 < pct <= 100:
         return web.json_response({"errors": {"discount": "Процент от 1 до 100."}}, status=422)
+    phone = auth.norm_phone(str(b.get("phone") or ""))
+    if not phone:
+        return web.json_response({"errors": {"phone": "Телефон дизайнера для перевода: 10 цифр после +7."}}, status=422)
     reward = amount * pct / 100
     tax = reward * 0.20
     res = {"reward": round(reward, 2), "tax": round(tax, 2), "payout": round(reward - tax, 2)}
@@ -615,6 +618,7 @@ async def payout_person(request: web.Request) -> web.Response:
     notify.text(
         f"💵 <b>Выплата дизайнеру — перевод на карту</b>\n{notify.who(user)}\n\n"
         f"Заказ / клиент: {esc(str(b.get('order_name') or '-'))}\nДизайнер: {esc(str(b.get('designer') or '-'))}\n"
+        f"📱 Телефон для перевода: {auth.pretty_phone(phone)}\n"
         f"Банк получателя: {esc(str(b.get('bank') or '-'))}\nСумма заказа: {money(amount)}\n\n"
         f"Процент дизайнера: {pct:g} %\nВознаграждение: {money(reward)}\nНалог за вывод (20%): −{money(tax)}\n"
         f"<b>К переводу на карту: {money(reward - tax)}</b>")

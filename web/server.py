@@ -46,7 +46,7 @@ from aiohttp import web  # noqa: E402
 
 import config  # noqa: E402
 import profiles  # noqa: E402
-from web import api, auth, notify  # noqa: E402
+from web import api, auth, claims_web, notify  # noqa: E402
 from web.store import Store, now  # noqa: E402
 
 log = logging.getLogger("web")
@@ -295,6 +295,7 @@ async def on_startup(app: web.Application) -> None:
     store_chat = int(chat) if chat else (config.ADMIN_CHAT_IDS[0] if config.ADMIN_CHAT_IDS else None)
     STORE = Store(admin, store_chat)
     api.STORE = STORE
+    claims_web.STORE, claims_web.ADMIN_BOT = STORE, admin
     await STORE.load()
     notify.configure(admin, config.ADMIN_CHAT_IDS)
     auth.init(os.getenv("WEB_SECRET") or config.ADMIN_BOT_TOKEN or "local-dev-secret")
@@ -311,6 +312,7 @@ async def on_shutdown(app: web.Application) -> None:
 def make_app() -> web.Application:
     app = web.Application(middlewares=[guard, no_cache_html], client_max_size=20 * 1024 * 1024)
     app.add_routes(api.routes)
+    app.add_routes(claims_web.routes)
     app.router.add_get("/", index)
     app.router.add_get("/app", app_page)
     app.router.add_get("/health", health)

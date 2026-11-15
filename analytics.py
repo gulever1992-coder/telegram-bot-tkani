@@ -31,6 +31,7 @@ KINDS = {
     "delivery": "🚚 Доставка",
     "card": "🏢 Карточка организации",
     "penalty": "⚖ Выплата пени",
+    "claim": "📣 Рекламации",
     "refund": "📝 Возвраты",
     "payout": "💵 Выплаты дизайнерам",
     "search": "🔎 Поиск ткани",
@@ -41,6 +42,9 @@ KINDS = {
 
 EVENTS: list[dict] = []
 DRAFTS: dict[str, dict] = {}  # черновики КП по uid — хранятся в том же журнале, переживают перезапуск
+# настройки владельца (кому приходят рекламации и т. п.) и заявки по рекламациям — там же
+SETTINGS: dict = {"rec_users": [], "rec_tokens": {}, "claim_seq": 0}
+CLAIMS: dict[str, dict] = {}
 _admin_bot: Bot | None = None
 _store_msg_id: int | None = None
 _persist_task: asyncio.Task | None = None
@@ -163,6 +167,16 @@ def drop_draft(uid: int) -> None:
         _changed()
 
 
+def save_state() -> None:
+    """Настройки/рекламации изменились — сохранить журнал (чуть позже, одной записью)."""
+    _changed()
+
+
+def next_claim_id() -> str:
+    SETTINGS["claim_seq"] = int(SETTINGS.get("claim_seq", 0)) + 1
+    return f"b{SETTINGS['claim_seq']}"
+
+
 def _changed() -> None:
     if not enabled():
         return
@@ -191,6 +205,9 @@ def _dump() -> bytes:
     lines = [json.dumps(e, ensure_ascii=False) for e in EVENTS]
     if DRAFTS:
         lines.append(json.dumps({"_drafts": DRAFTS}, ensure_ascii=False))
+    lines.append(json.dumps({"_settings": SETTINGS}, ensure_ascii=False))
+    if CLAIMS:
+        lines.append(json.dumps({"_claims": CLAIMS}, ensure_ascii=False))
     return "\n".join(lines).encode("utf-8")
 
 
@@ -247,6 +264,10 @@ async def load() -> int:
                 obj = json.loads(line)
                 if "_drafts" in obj:
                     DRAFTS.update(obj["_drafts"])
+                elif "_settings" in obj:
+                    SETTINGS.update(obj["_settings"])
+                elif "_claims" in obj:
+                    CLAIMS.update(obj["_claims"])
                 else:
                     loaded.append(obj)
         EVENTS[:0] = loaded

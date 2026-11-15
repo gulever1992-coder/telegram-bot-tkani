@@ -39,6 +39,9 @@ class Step:
 
 CARD = lambda a: a.get("method") == "card"  # noqa: E731
 
+# последнее оформленное заявление менеджера (пока бот работает) — чтобы оформить рядом «пени»/«возврат» с теми же данными
+LAST: dict[int, dict] = {}
+
 STEPS_FIZ = [
     Step("purchase_date", "Дата покупки (ДД.ММ.ГГГГ):", "date"),
     Step("order", "Договор / заказ клиента (номер или название):"),
@@ -186,9 +189,14 @@ async def _finish(target: types.Message, state: FSMContext) -> None:
     kind_ru = "физлицо" if data["kind"] == "fiz" else "юрлицо"
     analytics.track(target.chat.id, "refund", f"{data['company']} / {data['kind']}", document=(pdf_bytes, name),
                     caption=f"📝 Заявление на возврат: {label}, {kind_ru}\n{analytics.who(target.chat.id)}")
+    LAST[target.chat.id] = {"company": data["company"], "kind": data["kind"], "answers": dict(data["answers"])}
+    follow = InlineKeyboardBuilder()
+    follow.row(InlineKeyboardButton(text="⚖ Оформить и пени (те же данные)", callback_data="ref:topenalty"))
+    follow.row(InlineKeyboardButton(text="🏠 В главное меню", callback_data="menu:home"))
     await target.answer_document(
         BufferedInputFile(pdf_bytes, filename=name),
         caption=f"Готово! Заявление на возврат: {label}, {kind_ru}.",
+        reply_markup=follow.as_markup(),
     )
     await status.delete()
     await state.clear()

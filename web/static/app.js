@@ -143,6 +143,7 @@ const ROUTES = [
   ["delivery", "🚚", "Стоимость доставки", viewDelivery],
   ["docs", "📝", "Возврат и пени", viewDocs],
   ["payout", "💵", "Выплата дизайнеру", viewPayout],
+  ["claims", "📣", "Рекламации", viewClaims],
   ["fabrics", "🔎", "Найти ткань", viewFabrics],
   ["tag", "🏷", "Ценник", viewTag],
   ["deals", "📈", "Планируемые продажи", viewDeals],
@@ -152,8 +153,8 @@ const ROUTES = [
 
 function renderNav() {
   const nav = document.getElementById("nav");
-  nav.replaceChildren(...ROUTES.flatMap(([key, icon, label], i) => [
-    i === 2 || i === 8 ? h("div", { class: "sep" }) : null,
+  nav.replaceChildren(...ROUTES.flatMap(([key, icon, label]) => [
+    ["delivery", "fabrics", "cards"].includes(key) ? h("div", { class: "sep" }) : null,
     h("a", { href: "#" + key, class: S.route === key ? "on" : "", onclick: () => document.getElementById("side").classList.remove("open") },
       h("span", { text: icon }), label),
   ]));
@@ -694,6 +695,7 @@ async function viewPayout() {
   const form = h("div", { class: "card" },
     field("ФИО клиента или название заказа", input(a.order_name, v => { a.order_name = v; paySave(); })),
     field("ФИО дизайнера", input(a.designer, v => { a.designer = v; paySave(); })),
+    field("Телефон дизайнера, на который нужен перевод *", input(a.phone, v => { a.phone = v; paySave(); }, { type: "tel", placeholder: "+7 999 123-45-67" }), { key: "phone" }),
     field("Банк получателя", input(a.bank, v => { a.bank = v; paySave(); })),
     h("div", { class: "grid2" },
       field("Сумма заказа, ₽ *", input(a.amount, v => { a.amount = v; paySave(); }, { inputmode: "numeric" }), { key: "amount" }),
@@ -709,6 +711,89 @@ async function viewPayout() {
     } catch (e) { if (e.data && e.data.errors) showErrors(form, e.data.errors); throw e; }
   }).catch(() => {}) });
   page("Выплата дизайнеру", "Перевод на карту физлицу: вознаграждение = сумма заказа × процент, минус 20%.", tabs, form, go, h("div", { style: "height:14px" }), out);
+}
+
+// =================================================================================================
+// Рекламации
+// =================================================================================================
+
+const CLM = local.get("claim") || { order: "", client: "", client_phone: "", item: "", problem: "", photos: [] };
+const clmSave = () => local.set("claim", CLM);
+const CLM_STATUS = { new: ["🆕 Новая", ""], work: ["🛠 В работе", ""], done: ["✅ Решена", "ok"] };
+
+async function viewClaims() {
+  const d = await api("GET", "/api/claims");
+  const rec = d.recipients.length ? d.recipients.join(", ") : "руководителю (рекламационист пока не назначен)";
+  const form = h("div", { class: "card" },
+    h("span", { class: "label", text: "Новая заявка" }),
+    field("Договор / заказ клиента *", input(CLM.order, v => { CLM.order = v; clmSave(); }), { key: "order" }),
+    h("div", { class: "grid2" },
+      field("ФИО клиента *", input(CLM.client, v => { CLM.client = v; clmSave(); }), { key: "client" }),
+      field("Телефон клиента *", input(CLM.client_phone, v => { CLM.client_phone = v; clmSave(); }, { type: "tel", placeholder: "+7 999 123-45-67" }), { key: "client_phone" })),
+    field("Изделие: модель, ткань, цвет *", input(CLM.item, v => { CLM.item = v; clmSave(); }), { key: "item" }),
+    field("Проблема: что не так, когда обнаружили *", h("textarea", { value: CLM.problem, oninput: e => { CLM.problem = e.target.value; clmSave(); } }), { key: "problem" }),
+    clmPhotos(),
+    h("p", { class: "muted", style: "font-size:13px", text: "Заявка уйдёт: " + rec + ". Руководитель получает копию." }));
+  const send = h("button", { text: "📣 Передать рекламационисту", onclick: () => busy(send, async () => {
+    try {
+      await api("POST", "/api/claims", CLM);
+      Object.assign(CLM, { order: "", client: "", client_phone: "", item: "", problem: "", photos: [] }); clmSave();
+      toast("Заявка передана. Статус появится ниже."); viewClaims();
+    } catch (e) { if (e.data && e.data.errors) { showErrors(form, e.data.errors); toast("Проверьте поля, отмеченные красным"); } throw e; }
+  }).catch(() => {}) });
+
+  const list = h("div", { class: "list" });
+  if (!d.items.length) list.append(h("div", { class: "empty", text: "Заявок пока не было." }));
+  for (const c of d.items) {
+    const [label, cls] = CLM_STATUS[c.status];
+    list.append(h("div", { class: "it", style: "align-items:flex-start" },
+      h("div", { class: "grow" },
+        h("div", { class: "t" }, `№${c.number} · ${c.order} `, h("span", { class: "badge " + cls, text: label })),
+        h("div", { class: "s", text: `${c.client}, ${c.client_phone} · ${c.item} · ${fmtTs(c.ts)}` }),
+        h("div", { class: "s", style: "white-space:pre-wrap;color:var(--ink)", text: c.problem }),
+        ...(c.log || []).map(l => h("div", { class: "s", text: `${CLM_STATUS[l.status][0]} — ${l.by}, ${fmtTs(l.ts)}` })),
+        ...(c.comments || []).map(cm => h("div", { class: "s", style: "color:var(--ink)", text: `💬 ${cm.by}: ${cm.text}` })))));
+  }
+  page("Рекламации", "Передайте заявку рекламационисту — статус «в работе» и «решена» появится здесь и придёт руководителю.",
+    form, h("div", { class: "row", style: "margin-bottom:18px" }, send,
+      h("button", { class: "ghost", text: "Очистить форму", onclick: () => { if (confirm("Очистить форму?")) { Object.assign(CLM, { order: "", client: "", client_phone: "", item: "", problem: "", photos: [] }); clmSave(); viewClaims(); } } })),
+    h("h3", { text: "Мои заявки" }), list);
+  const timer = setInterval(async () => {  // статусы обновляются сами, пока страница открыта
+    if (S.route !== "claims") { clearInterval(timer); return; }
+    try {
+      const fresh = await api("GET", "/api/claims");
+      if (JSON.stringify(fresh.items) !== JSON.stringify(d.items) && !document.activeElement.matches("input,textarea")) { clearInterval(timer); viewClaims(); }
+    } catch (e) { clearInterval(timer); }
+  }, 30000);
+}
+
+function clmPhotos() {
+  const wrap = h("div", { class: "field" }, h("span", { text: `Фото (до 8)` }));
+  const row = h("div", { class: "row" });
+  const file = h("input", { type: "file", accept: "image/*", multiple: true, style: "padding:8px" });
+  function draw() {
+    row.replaceChildren(...CLM.photos.map((id, i) => h("div", { style: "position:relative" },
+      h("img", { class: "thumb", src: "/api/photo?id=" + encodeURIComponent(id), alt: "" }),
+      h("button", { type: "button", class: "icon", style: "position:absolute;top:-6px;right:-6px;padding:0 6px", text: "✕",
+        onclick: () => { CLM.photos.splice(i, 1); clmSave(); draw(); } }))));
+  }
+  file.onchange = async () => {
+    const st = h("span", { class: "spin" }); file.after(st);
+    for (const f of [...file.files]) {
+      if (CLM.photos.length >= 8) { toast("Максимум 8 фото"); break; }
+      const fd = new FormData(); fd.append("file", f);
+      try {
+        const r = await fetch("/api/photo", { method: "POST", body: fd, credentials: "same-origin" });
+        const d = await r.json();
+        if (!r.ok) throw new Error(d.error || "Фото не загрузилось");
+        CLM.photos.push(d.id); clmSave(); draw();
+      } catch (e) { toast(e.message); }
+    }
+    st.remove(); file.value = "";
+  };
+  draw();
+  wrap.append(row, file);
+  return wrap;
 }
 
 // =================================================================================================

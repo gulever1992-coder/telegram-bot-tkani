@@ -1,7 +1,8 @@
 """Пакет документов для выплаты дизайнеру (агенту): договор, реквизиты, отчёт, счёт, акт.
 
-Данные дизайнера (Агента) подставляются из ответов в боте, данные Принципала —
-из principal.py, печать и подпись — из папки assets/ (они не публикуются в GitHub).
+Оформление — в стиле КП и заявлений Creatica: монохром, тонкие линии, IBM Plex Sans, логотип сверху,
+сумма на светлой плашке. Данные дизайнера (Агента) подставляются из ответов в боте/на сайте, данные
+Принципала — из principal.py, печать и подпись — из папки assets/ (они не публикуются в GitHub).
 """
 
 from __future__ import annotations
@@ -13,23 +14,26 @@ from dataclasses import dataclass
 
 from num2words import num2words
 from reportlab.lib import colors
-from reportlab.lib.enums import TA_CENTER, TA_JUSTIFY, TA_LEFT
+from reportlab.lib.enums import TA_JUSTIFY, TA_LEFT, TA_RIGHT
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import ParagraphStyle
-from reportlab.lib.units import mm
 from reportlab.pdfbase import pdfmetrics
-from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.platypus import (
+    BaseDocTemplate,
     Flowable,
+    Frame,
     Image,
     KeepTogether,
     PageBreak,
+    PageTemplate,
     Paragraph,
-    SimpleDocTemplate,
     Spacer,
     Table,
     TableStyle,
 )
+
+from utils import tag as tagmod
+from utils.kp import BRAND, GREY, HAIR, INK, ML, MR, PANEL, PH, PW, SHOWROOM, SITE
 
 try:
     from principal import PRINCIPAL
@@ -43,25 +47,17 @@ MONTHS = [
 ]
 
 FONT, FONT_B = "Helvetica", "Helvetica-Bold"
+NB = "\xa0"
+C_INK, C_GREY, C_HAIR, C_PANEL = colors.Color(*INK), colors.Color(*GREY), colors.Color(*HAIR), colors.Color(*PANEL)
+CW = MR - ML  # ширина рабочей области
 
 
 def _register_fonts() -> None:
     global FONT, FONT_B
+    tagmod._register_fonts()
+    FONT, FONT_B = tagmod.REG, tagmod.BOLD
     if FONT != "Helvetica":
-        return
-    regular = os.path.join(ROOT, "fonts", "DejaVuSans.ttf")
-    bold = os.path.join(ROOT, "fonts", "DejaVuSans-Bold.ttf")
-    if not os.path.exists(regular):
-        regular = r"C:\Windows\Fonts\arial.ttf"
-        bold = r"C:\Windows\Fonts\arialbd.ttf"
-    if os.path.exists(regular):
-        pdfmetrics.registerFont(TTFont("Main", regular))
-        FONT = "Main"
-        if os.path.exists(bold):
-            pdfmetrics.registerFont(TTFont("Main-B", bold))
-            FONT_B = "Main-B"
-        else:
-            FONT_B = "Main"
+        pdfmetrics.registerFontFamily(FONT, normal=FONT, bold=FONT_B, italic=FONT, boldItalic=FONT_B)
 
 
 @dataclass
@@ -88,7 +84,8 @@ class AgencyData:
 
 
 def fmt(x: float) -> str:
-    return f"{x:,.2f}"
+    """1 234,50 — как в КП и заявлениях."""
+    return f"{x:,.2f}".replace(",", NB).replace(".", ",")
 
 
 def tax_sum(data: "AgencyData") -> str:
@@ -101,7 +98,8 @@ def tax_sum(data: "AgencyData") -> str:
 
 
 def words(x: float) -> str:
-    text = num2words(round(x, 2), lang="ru")
+    """Сумма прописью — только рубли (копейки пишутся цифрами рядом)."""
+    text = num2words(int(x), lang="ru")
     return text[:1].upper() + text[1:]
 
 
@@ -114,36 +112,142 @@ def rub_line(x: float, tail: str = "руб. {k:02d} коп.") -> str:
     return f"{fmt(x)} ({words(x)}) " + tail.format(k=kop)
 
 
-def _image(name: str, width: float, height: float):
-    path = os.path.join(ROOT, "assets", name)
-    if os.path.exists(path):
-        return Image(path, width=width, height=height)
-    return Spacer(width, height)
+def _spaced(c, x: float, y: float, s: str, size: float = 6.8, color=C_GREY, font: str | None = None, align: str = "l",
+            space: float = 1.1) -> None:
+    """Подпись мелкими прописными с разрядкой — как в КП."""
+    font = font or FONT
+    s = s.upper()
+    w = c.stringWidth(s, font, size) + space * max(len(s) - 1, 0)
+    if align == "r":
+        x -= w
+    t = c.beginText(x, y)
+    t.setFont(font, size)
+    t.setFillColor(color)
+    t.setCharSpace(space)
+    t.textOut(s)
+    c.drawText(t)
+
+
+# --- страница: логотип, сайт, подвал — как в КП -----------------------------------------------------
+
+
+def _on_page(c, doc) -> None:
+    c.saveState()
+    logo = os.path.join(BRAND, "creatica_logo.png")
+    if os.path.exists(logo):
+        from reportlab.lib.utils import ImageReader
+
+        img = ImageReader(logo)
+        h = 17.0
+        w = h * img.getSize()[0] / img.getSize()[1]
+        c.drawImage(img, ML, PH - 34 - h, w, h, mask="auto")
+    c.setFont(FONT, 8.5)
+    c.setFillColor(C_GREY)
+    c.drawRightString(MR, PH - 45, SITE)
+    c.setStrokeColor(C_HAIR)
+    c.setLineWidth(0.5)
+    c.line(ML, 38, MR, 38)
+    c.setFont(FONT, 7)
+    c.drawString(ML, 26, SHOWROOM)
+    c.drawRightString(MR, 26, f"стр. {doc.page}")
+    c.restoreState()
+
+
+class _Title(Flowable):
+    """Подпись-разрядка, тонкая чёрная линия, крупный заголовок (и строка под ним)."""
+
+    def __init__(self, label: str, title: str, sub: str = ""):
+        super().__init__()
+        self.label, self.title, self.sub = label, title, sub
+        self.width, self.height = CW, (62 if sub else 50)
+
+    def wrap(self, aw, ah):
+        self.width = aw
+        return aw, self.height
+
+    def draw(self):
+        c = self.canv
+        top = self.height
+        _spaced(c, 0, top - 8, self.label)
+        c.setStrokeColor(C_INK)
+        c.setLineWidth(0.8)
+        c.line(0, top - 16, self.width, top - 16)
+        c.setFillColor(C_INK)
+        c.setFont(FONT_B, 15)
+        c.drawString(0, top - 38, self.title)
+        if self.sub:
+            c.setFont(FONT, 9)
+            c.setFillColor(C_GREY)
+            c.drawString(0, top - 54, self.sub)
+
+
+class _Label(Flowable):
+    """Мелкая серая подпись-разрядка + тонкая линия (заголовок раздела)."""
+
+    def __init__(self, text: str):
+        super().__init__()
+        self.text = text
+        self.width, self.height = CW, 20
+
+    def wrap(self, aw, ah):
+        self.width = aw
+        return aw, self.height
+
+    def draw(self):
+        c = self.canv
+        _spaced(c, 0, 10, self.text)
+        c.setStrokeColor(C_HAIR)
+        c.setLineWidth(0.5)
+        c.line(0, 2, self.width, 2)
 
 
 class _SignStamp(Flowable):
     """Строка «____ / Фамилия И. О. /» с подписью на линии и печатью, заходящей на подпись (М.П.)."""
 
-    LINE = "________________"
-
     def __init__(self, name: str):
         super().__init__()
         self.name = name
-        self.width, self.height = 240, 78
+        self.width, self.height = 250, 78
 
     def draw(self):
         c = self.canv
         base_y = 30  # базовая линия строки подписи
         x0 = 56  # слева от линии место под печать (М.П.)
+        line_w = 104
+        c.setStrokeColor(C_INK)
+        c.setLineWidth(0.6)
+        c.line(x0, base_y - 1.5, x0 + line_w, base_y - 1.5)
         c.setFont(FONT, 8)
-        c.drawString(x0, base_y, f"{self.LINE} / {self.name} /")
-        line_w = c.stringWidth(self.LINE, FONT, 8)
+        c.setFillColor(C_INK)
+        c.drawString(x0 + line_w + 6, base_y, f"/ {self.name} /")
         sig = os.path.join(ROOT, "assets", "signature.png")
         stamp = os.path.join(ROOT, "assets", "stamp.png")
         if os.path.exists(stamp):  # печать слева, заходит на начало линии подписи
             c.drawImage(stamp, 0, 0, 76, 76, mask="auto")
         if os.path.exists(sig):  # подпись — на линии, правее печати, расшифровка остаётся открытой
             c.drawImage(sig, x0 + line_w * 0.25, base_y - 8, 54, 38, mask="auto")
+
+
+class _SignLine(Flowable):
+    """Пустая строка подписи (для Агента): линия и расшифровка, ниже — «М.П. (при наличии)»."""
+
+    def __init__(self, name: str, stamp_note: bool = True):
+        super().__init__()
+        self.name, self.note = name, stamp_note
+        self.width, self.height = 250, 40
+
+    def draw(self):
+        c = self.canv
+        c.setStrokeColor(C_INK)
+        c.setLineWidth(0.6)
+        c.line(0, 22, 104, 22)
+        c.setFont(FONT, 8)
+        c.setFillColor(C_INK)
+        c.drawString(110, 23.5, f"/ {self.name} /")
+        if self.note:
+            c.setFont(FONT, 7)
+            c.setFillColor(C_GREY)
+            c.drawString(0, 8, "М.П. (при наличии)")
 
 
 def _sign_block(name: str) -> Flowable:
@@ -201,45 +305,76 @@ def build_agency_package(data: AgencyData) -> io.BytesIO:
     P = PRINCIPAL
     num, d_long = data.number, date_long(data.date)
 
-    base = ParagraphStyle("base", fontName=FONT, fontSize=7.4, leading=9.2, alignment=TA_LEFT)
+    base = ParagraphStyle("base", fontName=FONT, fontSize=8.2, leading=11.4, alignment=TA_LEFT, textColor=C_INK)
     just = ParagraphStyle("just", parent=base, alignment=TA_JUSTIFY)
-    small = ParagraphStyle("small", parent=base, fontSize=7.5, leading=9.5)
-    head = ParagraphStyle("head", parent=base, fontName=FONT_B, fontSize=8, spaceBefore=3, spaceAfter=0)
-    bullet = ParagraphStyle("bul", parent=just, leftIndent=10, bulletIndent=2)
-    title = ParagraphStyle("title", parent=base, fontName=FONT_B, fontSize=12, leading=15, alignment=TA_CENTER)
-    title_n = ParagraphStyle("title_n", parent=title, fontName=FONT, fontSize=12)
-    sub = ParagraphStyle("sub", parent=title, fontSize=10, leading=13)
-    cell = ParagraphStyle("cell", parent=base, fontSize=8, leading=10)
-    cellc = ParagraphStyle("cellc", parent=cell, alignment=TA_CENTER)
-    cellb = ParagraphStyle("cellb", parent=cellc, fontName=FONT_B)
+    small = ParagraphStyle("small", parent=base, fontSize=8, leading=10.8)
+    muted = ParagraphStyle("muted", parent=base, fontSize=7.4, leading=10, textColor=C_GREY)
+    head = ParagraphStyle("head", parent=base, fontName=FONT_B, fontSize=8.8, leading=11.5, spaceBefore=7, spaceAfter=1)
+    bullet = ParagraphStyle("bul", parent=just, leftIndent=11, bulletIndent=2)
+    right = ParagraphStyle("right", parent=base, alignment=TA_RIGHT)
+    cell = ParagraphStyle("cell", parent=base, fontSize=8, leading=10.6)
+    cellc = ParagraphStyle("cellc", parent=cell, alignment=1)
+    cellr = ParagraphStyle("cellr", parent=cell, alignment=TA_RIGHT)
+    th = ParagraphStyle("th", parent=cell, fontSize=6.8, leading=8.4, textColor=C_GREY)
+    thr = ParagraphStyle("thr", parent=th, alignment=TA_RIGHT)
+    thc = ParagraphStyle("thc", parent=th, alignment=1)
+    big = ParagraphStyle("big", parent=base, fontName=FONT_B, fontSize=17, leading=21)
 
     def para(t, s=base):
         return Paragraph(t, s)
 
-    grid = TableStyle(
-        [
-            ("GRID", (0, 0), (-1, -1), 0.5, colors.black),
+    def lab(t):
+        return Paragraph(t.upper(), th)
+
+    def rule_table(rows, widths, header=True, total_row=False, extra=()):
+        t = Table(rows, colWidths=widths, repeatRows=1 if header else 0)
+        st = [
             ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
-            ("TOPPADDING", (0, 0), (-1, -1), 3),
-            ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
+            ("TOPPADDING", (0, 0), (-1, -1), 5),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+            ("LEFTPADDING", (0, 0), (-1, -1), 4),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 4),
+            ("LINEBELOW", (0, 0), (-1, -1), 0.5, C_HAIR),
         ]
-    )
-    head_bg = ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#F2F2F2"))
+        if header:
+            st += [("LINEBELOW", (0, 0), (-1, 0), 0.8, C_INK), ("TOPPADDING", (0, 0), (-1, 0), 3)]
+        if total_row:
+            st += [("BACKGROUND", (0, -1), (-1, -1), C_PANEL), ("LINEBELOW", (0, -1), (-1, -1), 0, C_PANEL)]
+        t.setStyle(TableStyle(st + list(extra)))
+        return t
+
+    def info_rows(pairs, lw=92, w=CW / 2 - 12):
+        """Строки «ПОДПИСЬ — значение» с тонкими линиями (как реквизиты в заявлении)."""
+        t = Table([[lab(k), para(v, cell)] for k, v in pairs if v], colWidths=[lw, w - lw])
+        t.setStyle(TableStyle([
+            ("VALIGN", (0, 0), (-1, -1), "TOP"), ("LINEBELOW", (0, 0), (-1, -1), 0.5, C_HAIR),
+            ("TOPPADDING", (0, 0), (-1, -1), 4), ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+            ("LEFTPADDING", (0, 0), (-1, -1), 0), ("RIGHTPADDING", (0, 0), (-1, -1), 4),
+        ]))
+        return t
+
+    def city_row():
+        t = Table([[para(P["city"], muted), para(d_long, ParagraphStyle("r", parent=muted, alignment=TA_RIGHT))]],
+                  colWidths=[CW / 2, CW / 2])
+        t.setStyle(TableStyle([("LEFTPADDING", (0, 0), (-1, -1), 0), ("RIGHTPADDING", (0, 0), (-1, -1), 0)]))
+        return t
+
+    def amount_panel(label: str, amount: float, extra: str = ""):
+        inner = [[lab(label)], [para(f"{fmt(amount)}{NB}₽", big)], [para(f"{words(amount)} руб. "
+                 f"{int(round((amount - int(amount)) * 100)):02d} коп.", muted)]]
+        if extra:
+            inner.append([para(extra, muted)])
+        t = Table(inner, colWidths=[CW])
+        t.setStyle(TableStyle([("BACKGROUND", (0, 0), (-1, -1), C_PANEL), ("LEFTPADDING", (0, 0), (-1, -1), 14),
+                               ("TOPPADDING", (0, 0), (-1, -1), 2), ("BOTTOMPADDING", (0, -1), (-1, -1), 12),
+                               ("TOPPADDING", (0, 0), (-1, 0), 12)]))
+        return t
 
     story: list = []
 
     # ------------------------------------------------------------ договор
-    story += [
-        para(f"ДОГОВОР № {num} / {data.date:%d.%m.%Y}", title),
-        para("на оказание агентских услуг", sub),
-        Spacer(1, 4),
-    ]
-    city_row = Table(
-        [[para(P["city"]), para(d_long, ParagraphStyle("r", parent=base, alignment=2))]],
-        colWidths=[257, 258],
-    )
-    city_row.setStyle(TableStyle([("LEFTPADDING", (0, 0), (-1, -1), 0), ("RIGHTPADDING", (0, 0), (-1, -1), 0)]))
-    story += [city_row, Spacer(1, 4)]
+    story += [_Title("Агентский договор", f"Договор № {num} от {data.date:%d.%m.%Y}", "на оказание агентских услуг"),
+              city_row(), Spacer(1, 6)]
     story.append(
         para(
             f"{data.agent_name}, ОГРНИП / ОГРН {data.ogrnip}, ИНН {data.inn}, именуемый в дальнейшем «Агент», "
@@ -249,7 +384,8 @@ def build_agency_package(data: AgencyData) -> io.BytesIO:
             just,
         )
     )
-    for kind, text in CONTRACT:
+    last_head = CONTRACT[-1][1]  # «9. Реквизиты и подписи Сторон» — выводим вместе с таблицей реквизитов
+    for kind, text in CONTRACT[:-1]:
         text = text.replace("{tax}%", f"{data.tax}% ({tax_sum(data)} руб.)")
         if kind == "h":
             story.append(para(text, head))
@@ -257,198 +393,162 @@ def build_agency_package(data: AgencyData) -> io.BytesIO:
             story.append(Paragraph(text, bullet, bulletText="•"))
         else:
             story.append(para(text, just))
-    story.append(PageBreak())
 
     # ------------------------------------------------------------ реквизиты
-    agent_cell = [
-        para("АГЕНТ (Исполнитель):", cell),
-        para(data.agent_name, cell),
-        para(f"ИНН: {data.inn}", cell),
-        para(f"ОГРНИП / ОГРН: {data.ogrnip}", cell),
-        para(f"Юр. адрес: {data.address}", cell),
-        para(f"Р/с: {data.rs}", cell),
-        para(f"Банк: {data.bank}", cell),
-        para(f"К/с: {data.ks}", cell),
-        para(f"БИК: {data.bik}", cell),
-        para(f"Тел.: {data.phone}", cell),
-        para(f"Email: {data.email}", cell),
-        Spacer(1, 10),
-        para(f"Агент: ________________ / {data.agent_name} /", cell),
-        para("М.П. (при наличии)", cell),
-    ]
-    principal_cell = [
-        para("ПРИНЦИПАЛ (Заказчик):", cell),
-        para(P["short_caps"], cell),
-        para(f"ИНН / КПП: {P['inn']} / {P['kpp']}", cell),
-        para(f"ОГРН: {P['ogrn']}", cell),
-        para(f"Юр. адрес: {P['address']}", cell),
-        para(f"Р/с: {P['rs']}", cell),
-        para(f"Банк: {P['bank']}", cell),
-        para(f"К/с: {P['ks']}", cell),
-        para(f"БИК: {P['bik']}", cell),
-        para(f"Тел.: {P['phone']}", cell),
-        Spacer(1, 6),
-        para(f"Генеральный директор {P['short']}:", cell),
-        _sign_block(P["director_short"]),
-    ]
-    req = Table([[agent_cell, principal_cell]], colWidths=[257, 258])
-    req.setStyle(TableStyle([("BOX", (0, 0), (-1, -1), 0.5, colors.grey), ("INNERGRID", (0, 0), (-1, -1), 0.5, colors.grey), ("VALIGN", (0, 0), (-1, -1), "TOP")]))
-    story += [req, PageBreak()]
+    gap = 24
+    half = (CW - gap) / 2
+    agent_rows = info_rows([
+        ("Агент", data.agent_name), ("ИНН", data.inn), ("ОГРНИП / ОГРН", data.ogrnip), ("Юр. адрес", data.address),
+        ("Р/с", data.rs), ("Банк", data.bank), ("К/с", data.ks), ("БИК", data.bik), ("Телефон", data.phone),
+        ("Email", data.email),
+    ], w=half)
+    principal_rows = info_rows([
+        ("Принципал", P["short_caps"]), ("ИНН / КПП", f"{P['inn']} / {P['kpp']}"), ("ОГРН", P["ogrn"]),
+        ("Юр. адрес", P["address"]), ("Р/с", P["rs"]), ("Банк", P["bank"]), ("К/с", P["ks"]), ("БИК", P["bik"]),
+        ("Телефон", P["phone"]),
+    ], w=half)
+    req = Table(
+        [[agent_rows, "", principal_rows],
+         [[Spacer(1, 6), para("Агент (Исполнитель):", muted), _SignLine(data.agent_name)], "",
+          [Spacer(1, 6), para(f"Генеральный директор {P['short']}:", muted), _sign_block(P["director_short"])]]],
+        colWidths=[half, gap, half],
+    )
+    req.setStyle(TableStyle([("VALIGN", (0, 0), (-1, -1), "TOP"), ("LEFTPADDING", (0, 0), (-1, -1), 0),
+                             ("RIGHTPADDING", (0, 0), (-1, -1), 0)]))
+    story.append(KeepTogether([para(last_head, head), Spacer(1, 4), req]))
+    story.append(PageBreak())
 
     # ------------------------------------------------------------ отчёт агента
     reward, sale = data.reward, data.sale_amount
     story += [
-        para("ОТЧЕТ АГЕНТА", title_n),
-        para(f"по агентскому договору № {num} от {d_long}", ParagraphStyle("t2", parent=title_n, fontSize=11, leading=14)),
-        Spacer(1, 6),
-        para(f"Кому: {P['short']}, {P['address']}", small),
-        para(f"От кого: {data.agent_name}", small),
-        para(f"Адрес: {data.address}&nbsp;&nbsp;&nbsp;&nbsp;Тел.: {data.phone}", small),
-        Spacer(1, 6),
+        _Title("Отчёт", "Отчёт агента", f"по агентскому договору № {num} от {d_long}"),
+        city_row(), Spacer(1, 8),
     ]
-    city_row2 = Table(
-        [[para(P["city"]), para(d_long, ParagraphStyle("r2", parent=base, alignment=2))]], colWidths=[257, 258]
-    )
-    city_row2.setStyle(TableStyle([("LEFTPADDING", (0, 0), (-1, -1), 0), ("RIGHTPADDING", (0, 0), (-1, -1), 0)]))
+    parties = Table([[info_rows([("Кому", f"{P['short']}, {P['address']}")], w=half),
+                      "", info_rows([("От кого", data.agent_name), ("Адрес", data.address), ("Телефон", data.phone)], w=half)]],
+                    colWidths=[half, gap, half])
+    parties.setStyle(TableStyle([("VALIGN", (0, 0), (-1, -1), "TOP"), ("LEFTPADDING", (0, 0), (-1, -1), 0),
+                                 ("RIGHTPADDING", (0, 0), (-1, -1), 0)]))
     story += [
-        city_row2,
-        Spacer(1, 4),
-        para(f"Направляю Отчет по агентскому договору № {num} от {d_long} За отчетный период выполнены следующие действия (операции):", just),
-        Spacer(1, 4),
-    ]
-    rep = Table(
-        [
-            [para("№<br/>п/п", cellb), para("Дата<br/>(период)", cellb), para("Наименование товара / заказа", cellb),
-             para("Стоимость<br/>товара, руб.", cellb), para("Кол-во", cellb), para("Сумма реализации,<br/>руб.", cellb),
-             para("Вознаграждение<br/>Агента, руб.", cellb)],
-            [para("1", cellc), para(f"{data.date:%d.%m.%Y}", cellc), para(data.order_name, cellc),
-             para(fmt(sale), cellc), para("1", cellc), para(fmt(sale), cellc), para(fmt(reward), cellc)],
-            [para("Итого:", cell), "", "", para(fmt(sale), cellc), para("1", cellc), para(fmt(sale), cellc), para(fmt(reward), cellc)],
-        ],
-        colWidths=[26, 58, 150, 68, 34, 84, 95],
-    )
-    rep.setStyle(TableStyle(list(grid.getCommands()) + [head_bg, ("SPAN", (0, 2), (2, 2))]))
-    story += [
-        rep,
-        Spacer(1, 6),
-        para("За отчетный период Агент надлежащим образом (качественно и в срок) выполнил свои обязательства по привлечению клиентов.", base),
-        para(f"Сумма агентского вознаграждения составляет: {rub_line(reward)}, налогообложение: {data.tax}% ({tax_sum(data)} руб.).", base),
-        para("Настоящий Отчет составлен в двух экземплярах, имеющих равную юридическую силу, по одному для каждой из Сторон. Возражения по Отчету принимаются в течение 5 рабочих дней с момента получения.", just),
-        Spacer(1, 14),
+        parties, Spacer(1, 10),
+        para(f"Направляю Отчёт по агентскому договору № {num} от {d_long} За отчётный период выполнены следующие "
+             "действия (операции):", just),
+        Spacer(1, 8),
+        rule_table(
+            [[Paragraph("№ П/П", thc), Paragraph("ДАТА (ПЕРИОД)", thc), Paragraph("НАИМЕНОВАНИЕ ТОВАРА / ЗАКАЗА", th),
+              Paragraph("СТОИМОСТЬ ТОВАРА, РУБ.", thr), Paragraph("КОЛ-ВО", thc), Paragraph("СУММА РЕАЛИЗАЦИИ, РУБ.", thr),
+              Paragraph("ВОЗНАГРАЖДЕНИЕ АГЕНТА, РУБ.", thr)],
+             [para("1", cellc), para(f"{data.date:%d.%m.%Y}", cellc), para(data.order_name, cell), para(fmt(sale), cellr),
+              para("1", cellc), para(fmt(sale), cellr), para(fmt(reward), cellr)],
+             [para("<b>Итого:</b>", cell), "", "", para(f"<b>{fmt(sale)}</b>", cellr), para("<b>1</b>", cellc),
+              para(f"<b>{fmt(sale)}</b>", cellr), para(f"<b>{fmt(reward)}</b>", cellr)]],
+            [24, 56, 128, 70, 38, 90, 109], total_row=True, extra=[("SPAN", (0, 2), (2, 2))]),
+        Spacer(1, 10),
+        amount_panel("Сумма агентского вознаграждения", reward, f"Налогообложение: {data.tax}% ({tax_sum(data)} руб.)"),
+        Spacer(1, 10),
+        para("За отчётный период Агент надлежащим образом (качественно и в срок) выполнил свои обязательства по "
+             "привлечению клиентов.", base),
+        Spacer(1, 3),
+        para("Настоящий Отчёт составлен в двух экземплярах, имеющих равную юридическую силу, по одному для каждой из "
+             "Сторон. Возражения по Отчёту принимаются в течение 5 рабочих дней с момента получения.", just),
+        Spacer(1, 16),
     ]
     sig = Table(
-        [[
-            [para("Отчет сдал (Агент):", cell), para(data.agent_name, cell), para(f"ИНН: {data.inn}", cell), Spacer(1, 26),
-             para(f"________________ / {data.agent_name} /", cell), para("М.П.", cell)],
-            [para("Отчет принял (Принципал):", cell), para(P["short"], cell), para("Генеральный директор", cell),
-             Spacer(1, 4), _sign_block(P["director_short"])],
-        ]],
-        colWidths=[257, 258],
-    )
-    sig.setStyle(TableStyle([("VALIGN", (0, 0), (-1, -1), "TOP"), ("LEFTPADDING", (0, 0), (-1, -1), 0)]))
-    story += [sig, PageBreak()]
+        [[[para("Отчёт сдал (Агент):", muted), para(data.agent_name, cell), para(f"ИНН: {data.inn}", cell),
+           Spacer(1, 10), _SignLine(data.agent_name)],
+          "",
+          [para("Отчёт принял (Принципал):", muted), para(P["short"], cell), para("Генеральный директор", cell),
+           _sign_block(P["director_short"])]]],
+        colWidths=[half, gap, half])
+    sig.setStyle(TableStyle([("VALIGN", (0, 0), (-1, -1), "TOP"), ("LEFTPADDING", (0, 0), (-1, -1), 0),
+                             ("RIGHTPADDING", (0, 0), (-1, -1), 0)]))
+    story += [KeepTogether(sig), PageBreak()]
 
     # ------------------------------------------------------------ счёт
-    story += [para(f"СЧЕТ НА ОПЛАТУ № {num} от {d_long}", title_n), Spacer(1, 10)]
+    story += [_Title("Счёт", f"Счёт на оплату № {num} от {d_long}"), Spacer(1, 6)]
     bank_tbl = Table(
         [
-            [[para("Банк получателя:", small), para(data.bank, small)], [para("БИК", small), para("Сч. №", small)],
+            [[para("БАНК ПОЛУЧАТЕЛЯ", th), para(data.bank, small)], [para("БИК", th), para("СЧ. №", th)],
              [para(data.bik, small), para(data.ks, small)]],
-            [[para(f"ИНН: {data.inn}", small), para("Получатель:", small), para(data.agent_name, small)],
-             [para("КПП", small), para("Сч. №", small)], [para("-", small), para(data.rs, small)]],
+            [[para(f"ИНН: {data.inn}", small), para("ПОЛУЧАТЕЛЬ", th), para(data.agent_name, small)],
+             [para("КПП", th), para("СЧ. №", th)], [para("-", small), para(data.rs, small)]],
         ],
-        colWidths=[300, 55, 160],
+        colWidths=[290, 55, CW - 345],
     )
-    bank_tbl.setStyle(TableStyle([("GRID", (0, 0), (-1, -1), 0.5, colors.black), ("VALIGN", (0, 0), (-1, -1), "TOP")]))
-    kpp_ogrn = data.ogrnip
+    bank_tbl.setStyle(TableStyle([("BOX", (0, 0), (-1, -1), 0.6, C_INK), ("INNERGRID", (0, 0), (-1, -1), 0.5, C_HAIR),
+                                  ("VALIGN", (0, 0), (-1, -1), "TOP"), ("TOPPADDING", (0, 0), (-1, -1), 4),
+                                  ("BOTTOMPADDING", (0, 0), (-1, -1), 4)]))
     story += [
-        bank_tbl,
-        Spacer(1, 6),
-        para(f"Поставщик (Исполнитель): {data.agent_name}, ИНН {data.inn}, {kpp_ogrn}, {data.address}, тел.: {data.phone}", small),
-        para(f"Покупатель (Заказчик): {P['short_caps']}, ИНН {P['inn']}, КПП {P['kpp']}, {P['address_invoice']}", small),
-        para(f"Основание: Агентский договор № {num} от {d_long} (Отчет Агента от {d_long})", small),
-        Spacer(1, 6),
-    ]
-    items = Table(
-        [
-            [para("№", cellb), para("Товары (работы, услуги)", cellb), para("Кол-во", cellb), para("Ед.", cellb),
-             para("Цена, руб.", cellb), para("Сумма, руб.", cellb)],
-            [para("1", cellc),
-             para(f"Агентское вознаграждение за привлечение клиентов по заказу «{data.order_name}» по Договору № {num}", cell),
-             para("1", cellc), para("усл. ед.", cellc), para(fmt(reward), cellc), para(fmt(reward), cellc)],
-        ],
-        colWidths=[25, 225, 50, 50, 80, 85],
-    )
-    items.setStyle(TableStyle(list(grid.getCommands()) + [head_bg]))
-    story += [
-        items,
-        Spacer(1, 6),
+        bank_tbl, Spacer(1, 10),
+        info_rows([
+            ("Поставщик", f"{data.agent_name}, ИНН {data.inn}, {data.ogrnip}, {data.address}, тел.: {data.phone}"),
+            ("Покупатель", f"{P['short_caps']}, ИНН {P['inn']}, КПП {P['kpp']}, {P['address_invoice']}"),
+            ("Основание", f"Агентский договор № {num} от {d_long} (Отчёт Агента от {d_long})"),
+        ], lw=80, w=CW),
+        Spacer(1, 12),
+        rule_table(
+            [[Paragraph("№", thc), Paragraph("ТОВАРЫ (РАБОТЫ, УСЛУГИ)", th), Paragraph("КОЛ-ВО", thc), Paragraph("ЕД.", thc),
+              Paragraph("ЦЕНА, РУБ.", thr), Paragraph("СУММА, РУБ.", thr)],
+             [para("1", cellc),
+              para(f"Агентское вознаграждение за привлечение клиентов по заказу «{data.order_name}» по Договору № {num}", cell),
+              para("1", cellc), para("усл. ед.", cellc), para(fmt(reward), cellr), para(fmt(reward), cellr)]],
+            [24, CW - 24 - 44 - 50 - 82 - 88, 44, 50, 82, 88]),
+        Spacer(1, 10),
         para(f"Всего наименований 1, на сумму {fmt(reward)} руб.", base),
-        para(f"Итого к оплате: {rub_line(reward)}", base),
-        para(f"Налогообложение: {data.tax}% — {tax_sum(data)} руб.", base),
-        Spacer(1, 16),
-        para(f"Руководитель / Предприниматель: ____________________ / {data.agent_name} /", base),
-        Spacer(1, 10),
-        para(f"Бухгалтер: ____________________ / {data.agent_name} /", base),
-        Spacer(1, 10),
-        para("М.П. (при наличии)", base),
+        Spacer(1, 6),
+        amount_panel("Итого к оплате", reward, f"Налогообложение: {data.tax}% — {tax_sum(data)} руб."),
+        Spacer(1, 18),
+        KeepTogether([
+            para("Руководитель / Предприниматель:", muted), _SignLine(data.agent_name, stamp_note=False), Spacer(1, 8),
+            para("Бухгалтер:", muted), _SignLine(data.agent_name, stamp_note=False), Spacer(1, 4),
+            para("М.П. (при наличии)", muted),
+        ]),
         PageBreak(),
     ]
 
     # ------------------------------------------------------------ акт
     story += [
-        para(f"АКТ № {num} от {d_long}", title_n),
-        para("об оказании агентских услуг", title_n),
-        Spacer(1, 8),
-        para(
-            f"Исполнитель: {data.agent_name}, ИНН: {data.inn}, ОГРНИП / ОГРН: {data.ogrnip}, Адрес: {data.address}, "
-            f"Р/с: {data.rs} в {data.bank}, БИК: {data.bik}, К/с: {data.ks}",
-            small,
-        ),
-        para(
-            f"Заказчик: {P['short_caps']}, ИНН: {P['inn']}, КПП: {P['kpp']}, Адрес: {P['address_invoice']}, "
-            f"Р/с: {P['rs']} в {P['bank_act']}, БИК: {P['bik']}, К/с: {P['ks']}",
-            small,
-        ),
-        para(f"Основание: Договор на оказание агентских услуг № {num} от {d_long} (Отчет Агента от {d_long})", small),
-        Spacer(1, 6),
-    ]
-    act = Table(
-        [
-            [para("№", cellb), para("Наименование работ, услуг", cellb), para("Кол-во", cellb), para("Ед.", cellb),
-             para("Цена, руб.", cellb), para("Сумма, руб.", cellb)],
-            [para("1", cellc),
-             para(f"Оказание услуг по поиску и привлечению клиентов по Договору № {num}<br/>(проект: {data.order_name})", cell),
-             para("1", cellc), para("усл. ед.", cellc), para(fmt(reward), cellc), para(fmt(reward), cellc)],
-        ],
-        colWidths=[25, 225, 50, 50, 80, 85],
-    )
-    act.setStyle(TableStyle(list(grid.getCommands()) + [head_bg]))
-    story += [
-        act,
-        Spacer(1, 6),
+        _Title("Акт", f"Акт № {num} от {d_long}", "об оказании агентских услуг"), Spacer(1, 6),
+        info_rows([
+            ("Исполнитель", f"{data.agent_name}, ИНН: {data.inn}, ОГРНИП / ОГРН: {data.ogrnip}, Адрес: {data.address}, "
+                            f"Р/с: {data.rs} в {data.bank}, БИК: {data.bik}, К/с: {data.ks}"),
+            ("Заказчик", f"{P['short_caps']}, ИНН: {P['inn']}, КПП: {P['kpp']}, Адрес: {P['address_invoice']}, "
+                         f"Р/с: {P['rs']} в {P['bank_act']}, БИК: {P['bik']}, К/с: {P['ks']}"),
+            ("Основание", f"Договор на оказание агентских услуг № {num} от {d_long} (Отчёт Агента от {d_long})"),
+        ], lw=80, w=CW),
+        Spacer(1, 12),
+        rule_table(
+            [[Paragraph("№", thc), Paragraph("НАИМЕНОВАНИЕ РАБОТ, УСЛУГ", th), Paragraph("КОЛ-ВО", thc), Paragraph("ЕД.", thc),
+              Paragraph("ЦЕНА, РУБ.", thr), Paragraph("СУММА, РУБ.", thr)],
+             [para("1", cellc),
+              para(f"Оказание услуг по поиску и привлечению клиентов по Договору № {num}<br/>(проект: {data.order_name})", cell),
+              para("1", cellc), para("усл. ед.", cellc), para(fmt(reward), cellr), para(fmt(reward), cellr)]],
+            [24, CW - 24 - 44 - 50 - 82 - 88, 44, 50, 82, 88]),
+        Spacer(1, 10),
         para(f"Всего оказано услуг 1, на сумму {fmt(reward)} руб. {int(round((reward - int(reward)) * 100)):02d} коп.", base),
-        para(f"Итого: {rub_line(reward, 'рублей {k:02d} копеек')}. Налогообложение: {data.tax}% ({tax_sum(data)} руб.).", base),
-        para("Вышеперечисленные услуги выполнены полностью и в срок. Заказчик претензий по объему, качеству и срокам оказания услуг не имеет.", base),
+        Spacer(1, 6),
+        amount_panel("Итого", reward, f"Налогообложение: {data.tax}% ({tax_sum(data)} руб.)"),
+        Spacer(1, 10),
+        para("Вышеперечисленные услуги выполнены полностью и в срок. Заказчик претензий по объёму, качеству и срокам "
+             "оказания услуг не имеет.", base),
         Spacer(1, 16),
     ]
     act_sig = Table(
-        [[
-            [para("ИСПОЛНИТЕЛЬ:", cell), para(data.agent_name, cell), para(f"ИНН: {data.inn}", cell), Spacer(1, 26),
-             para(f"________________ / {data.agent_name} /", cell), para("М.П.", cell)],
-            [para("ЗАКАЗЧИК:", cell), para(P["short_caps"], cell), para("Генеральный директор", cell),
-             Spacer(1, 4), _sign_block(P["director_short"])],
-        ]],
-        colWidths=[257, 258],
-    )
-    act_sig.setStyle(TableStyle([("VALIGN", (0, 0), (-1, -1), "TOP"), ("LEFTPADDING", (0, 0), (-1, -1), 0)]))
+        [[[para("Исполнитель:", muted), para(data.agent_name, cell), para(f"ИНН: {data.inn}", cell), Spacer(1, 10),
+           _SignLine(data.agent_name)],
+          "",
+          [para("Заказчик:", muted), para(P["short_caps"], cell), para("Генеральный директор", cell),
+           _sign_block(P["director_short"])]]],
+        colWidths=[half, gap, half])
+    act_sig.setStyle(TableStyle([("VALIGN", (0, 0), (-1, -1), "TOP"), ("LEFTPADDING", (0, 0), (-1, -1), 0),
+                                 ("RIGHTPADDING", (0, 0), (-1, -1), 0)]))
     story.append(KeepTogether(act_sig))
 
     buf = io.BytesIO()
-    doc = SimpleDocTemplate(
-        buf, pagesize=A4, leftMargin=40, rightMargin=40, topMargin=32, bottomMargin=32,
-        title=f"Агентский договор № {num}", author=data.agent_name,
-    )
+    doc = BaseDocTemplate(buf, pagesize=A4, title=f"Агентский договор № {num}", author="Creatica")
+    doc.addPageTemplates([PageTemplate(
+        id="main", onPage=_on_page,
+        frames=[Frame(ML, 52, CW, PH - 52 - 66, leftPadding=0, rightPadding=0, topPadding=0, bottomPadding=0)])])
     doc.build(story)
     buf.seek(0)
     return buf

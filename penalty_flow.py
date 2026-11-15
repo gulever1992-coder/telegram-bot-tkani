@@ -16,7 +16,7 @@ from aiogram.types import BufferedInputFile, InlineKeyboardButton
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 import analytics
-from refund_flow import CARD, Step, _parse
+from refund_flow import CARD, LAST, Step, _parse
 from utils.refund import MONTHS, REFUND_COMPANIES, buyer_lines, money_words, payout_section, signer_name
 from utils.statement import Statement, build_statement_pdf, money
 from utils.ui import show
@@ -79,7 +79,12 @@ RATE = 0.1  # % от суммы договора за каждый день пр
 DELIVERY_WORKDAYS = 7  # на доставку после даты готовности
 
 
+_CALC_IN = _CALC[:3]  # сначала только то, что нужно для расчёта: сумма договора, готовность, доставка
+
+
 def _steps(kind: str) -> list[Step]:
+    if kind == "calc":
+        return _CALC_IN
     return _HEAD + (_FIZ if kind == "fiz" else _YUR) + _CALC + (_PAY_FIZ if kind == "fiz" else _PAY_YUR) + _TAIL
 
 
@@ -138,7 +143,10 @@ async def _ask(target: types.Message, state: FSMContext) -> None:
     answers = data["answers"]
     step = _next_step(data["kind"], answers)
     if step is None:
-        await _finish(target, state)
+        if data["kind"] == "calc":
+            await _offer(target, state)
+        else:
+            await _finish(target, state)
         return
     text = f"{len(answers) + 1}. {step.prompt}"
     if step.key == "amount":
@@ -151,6 +159,33 @@ async def _ask(target: types.Message, state: FSMContext) -> None:
                 f"{days} дн. × 0,1% × {money(answers['contract_sum'])} = <b>{money(calc)}</b>"
                 + f"\n\n{text}\nНажмите «По расчёту» или впишите согласованную сумму.")
     await target.answer(text, reply_markup=_markup(step, answers))
+
+
+def _calc_text(answers: dict) -> str:
+    days, calc = penalty_calc(answers)
+    fact = answers["fact_date"]
+    head = (f"🧮 Готовность {answers['ready_date']:%d.%m.%Y} + {DELIVERY_WORKDAYS} раб. дней = срок доставки "
+            f"<b>{delivery_deadline(answers):%d.%m.%Y}</b>\n"
+            f"{'Не доставлен, считаем по' if answers.get('not_delivered') else 'Доставлено'} {fact:%d.%m.%Y} → "
+            f"просрочка <b>{days} дн.</b>\n")
+    if not days:
+        return head + "Просрочки нет — пени не начисляются."
+    return head + f"{days} дн. × 0,1% × {money(answers['contract_sum'])} = <b>{money(calc)}</b>"
+
+
+async def _offer(target: types.Message, state: FSMContext) -> None:
+    """Расчёт готов — предлагаем оформить заявление от ИП Сабиров или ООО «Феникс»."""
+    answers = (await state.get_data())["answers"]
+    days, calc = penalty_calc(answers)
+    b = InlineKeyboardBuilder()
+    if days:
+        for key, co in REFUND_COMPANIES.items():
+            b.row(InlineKeyboardButton(text=f"📄 Оформить заявление — {co['label']}", callback_data=f"pen:co:{key}"))
+    b.row(InlineKeyboardButton(text="🔁 Пересчитать", callback_data="pen:recalc"),
+          InlineKeyboardButton(text="✔ Достаточно расчёта", callback_data="pen:close"))
+    b.row(InlineKeyboardButton(text="🏠 В главное меню", callback_data="menu:home"))
+    tail = "\n\nОформить заявление на выплату пени? Выберите, от какой организации:" if days else ""
+    await target.answer(_calc_text(answers) + tail, reply_markup=b.as_markup())
 
 
 async def _store(target: types.Message, state: FSMContext, step: Step, value) -> None:
@@ -206,7 +241,9 @@ async def _finish(target: types.Message, state: FSMContext) -> None:
     analytics.track(target.chat.id, "penalty", f"{data['company']} / {data['kind']}", document=(pdf, name),
                     caption=f"⚖ Заявление на выплату пени: {label}, {kind_ru}, {money(a.get('amount') or 0)}\n"
                             f"{analytics.who(target.chat.id)}")
+    LAST[target.chat.id] = {"company": data["company"], "kind": data["kind"], "answers": dict(data["answers"])}
     b = InlineKeyboardBuilder()
+    b.row(InlineKeyboardButton(text="📝 Оформить и возврат (те же данные)", callback_data="pen:torefund"))
     b.row(InlineKeyboardButton(text="⚖ Новое заявление", callback_data="menu:penalty"))
     b.row(InlineKeyboardButton(text="🏠 В главное меню", callback_data="menu:home"))
     await target.answer_document(BufferedInputFile(pdf, filename=name),
@@ -221,14 +258,43 @@ async def _finish(target: types.Message, state: FSMContext) -> None:
 
 @router.callback_query(F.data == "menu:penalty")
 async def cb_penalty(call: types.CallbackQuery, state: FSMContext) -> None:
+    """Сначала считаем пени (3 вопроса), потом предлагаем оформить заявление от ИП Сабиров / ООО «Феникс»."""
     await state.clear()
-    b = InlineKeyboardBuilder()
-    for key, co in REFUND_COMPANIES.items():
-        b.row(InlineKeyboardButton(text=co["label"], callback_data=f"pen:co:{key}"))
-    b.row(InlineKeyboardButton(text="🏠 В главное меню", callback_data="menu:home"))
-    await show(call.message, "⚖ <b>Заявление на выплату пени</b> (неустойка за просрочку передачи товара)\n"
-                             "На какую организацию оформляем?", reply_markup=b.as_markup())
+    await state.set_state(PenaltyForm.ask)
+    await state.update_data(kind="calc", answers={})
+    await show(call.message, "⚖ <b>Выплата пени</b> — неустойка 0,1% от суммы договора за каждый день просрочки.\n"
+                             "Сначала посчитаю пени (3 вопроса), потом предложу оформить заявление.")
     await call.answer()
+    await _ask(call.message, state)
+
+
+@router.callback_query(F.data == "pen:recalc")
+async def cb_recalc(call: types.CallbackQuery, state: FSMContext) -> None:
+    await state.set_state(PenaltyForm.ask)
+    await state.update_data(kind="calc", answers={})
+    await call.answer()
+    await _ask(call.message, state)
+
+
+@router.callback_query(F.data == "pen:close")
+async def cb_close(call: types.CallbackQuery, state: FSMContext) -> None:
+    await state.clear()
+    await call.answer("Готово")
+    b = InlineKeyboardBuilder()
+    b.row(InlineKeyboardButton(text="⚖ Новый расчёт", callback_data="menu:penalty"))
+    b.row(InlineKeyboardButton(text="🏠 В главное меню", callback_data="menu:home"))
+    await call.message.answer("Хорошо, расчёт выше. Если понадобится заявление — «⚖ Выплата пени».",
+                              reply_markup=b.as_markup())
+
+
+@router.callback_query(F.data == "pen:offer")
+async def cb_offer_again(call: types.CallbackQuery, state: FSMContext) -> None:
+    data = await state.get_data()
+    if not data.get("answers") or data.get("kind") not in ("calc", "fiz", "yur") or "fact_date" not in data["answers"]:
+        await call.answer("Начните заново: ⚖ Выплата пени", show_alert=True)
+        return
+    await call.answer()
+    await _offer(call.message, state)
 
 
 @router.callback_query(F.data.startswith("pen:co:"))
@@ -241,7 +307,7 @@ async def cb_company(call: types.CallbackQuery, state: FSMContext) -> None:
     b = InlineKeyboardBuilder()
     b.row(InlineKeyboardButton(text="👤 Физическое лицо", callback_data="pen:kind:fiz"))
     b.row(InlineKeyboardButton(text="🏢 Юридическое лицо", callback_data="pen:kind:yur"))
-    b.row(InlineKeyboardButton(text="⬅ Назад", callback_data="menu:penalty"))
+    b.row(InlineKeyboardButton(text="⬅ Назад", callback_data="pen:offer"))
     await show(call.message, f"⚖ Выплата пени — <b>{REFUND_COMPANIES[company]['label']}</b>\nКто покупатель?",
                reply_markup=b.as_markup())
     await call.answer()
@@ -253,11 +319,59 @@ async def cb_kind(call: types.CallbackQuery, state: FSMContext) -> None:
     if "company" not in data:
         await call.answer("Начните заново: ⚖ Выплата пени", show_alert=True)
         return
-    await state.update_data(kind=call.data.split(":")[2], answers={})
+    # данные расчёта (сумма договора, даты) уже введены — второй раз их не спрашиваем
+    await state.update_data(kind=call.data.split(":")[2], answers=data.get("answers") or {})
     await state.set_state(PenaltyForm.ask)
-    await show(call.message, "⚖ Отвечайте на вопросы по очереди — пени посчитаю сам, в конце пришлю PDF.")
+    await show(call.message, "⚖ Отвечайте на вопросы по очереди — в конце пришлю готовое заявление (PDF).")
     await call.answer()
     await _ask(call.message, state)
+
+
+# --- «те же данные» для заявления на возврат и обратно ---------------------------------------------
+
+# что можно перенести из заявления на возврат в пени и обратно (суммы у них разные — их не переносим)
+_SHARED = {"order", "name", "passport", "passport_issuer", "passport_date", "org", "director", "director_name",
+           "method", "recipient", "bank", "bik", "bank_inn", "ks", "account", "card", "pay_org", "pay_inn", "pay_ogrn",
+           "pay_rs", "pay_ls", "doc_date"}
+
+
+def _carry(src: dict, dst_date_key: str, src_date_key: str) -> dict:
+    out = {k: v for k, v in src.items() if k in _SHARED}
+    if src.get(src_date_key):
+        out[dst_date_key] = src[src_date_key]
+    return out
+
+
+@router.callback_query(F.data == "ref:topenalty")
+async def cb_from_refund(call: types.CallbackQuery, state: FSMContext) -> None:
+    last = LAST.get(call.from_user.id)
+    if not last:
+        await call.answer("Данные не сохранились — начните заново: ⚖ Выплата пени", show_alert=True)
+        return
+    await state.clear()
+    await state.set_state(PenaltyForm.ask)
+    await state.update_data(company=last["company"], kind=last["kind"],
+                            answers=_carry(last["answers"], "contract_date", "purchase_date"))
+    await call.answer()
+    await call.message.answer("⚖ Оформляем и пени — данные из заявления на возврат подставлю сам.")
+    await _ask(call.message, state)
+
+
+@router.callback_query(F.data == "pen:torefund")
+async def cb_to_refund(call: types.CallbackQuery, state: FSMContext) -> None:
+    import refund_flow  # внутри функции — модули ссылаются друг на друга
+
+    last = LAST.get(call.from_user.id)
+    if not last:
+        await call.answer("Данные не сохранились — начните заново: 📝 Заявление на возврат", show_alert=True)
+        return
+    await state.clear()
+    await state.set_state(refund_flow.RefundForm.ask)
+    await state.update_data(company=last["company"], kind=last["kind"],
+                            answers=_carry(last["answers"], "purchase_date", "contract_date"))
+    await call.answer()
+    await call.message.answer("📝 Оформляем и заявление на возврат — данные из заявления на пени подставлю сам.")
+    await refund_flow._ask(call.message, state)
 
 
 @router.callback_query(F.data.startswith("pen:v:"), PenaltyForm.ask)
@@ -300,7 +414,10 @@ async def msg_answer(message: types.Message, state: FSMContext) -> None:
     data = await state.get_data()
     step = _next_step(data["kind"], data["answers"])
     if step is None:
-        await _finish(message, state)
+        if data["kind"] == "calc":
+            await _offer(message, state)
+        else:
+            await _finish(message, state)
         return
     if step.kind == "choice":
         await message.answer("Выберите вариант кнопкой ниже.", reply_markup=_markup(step, data["answers"]))

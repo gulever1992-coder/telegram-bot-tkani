@@ -7,6 +7,8 @@ from __future__ import annotations
 
 import asyncio
 import datetime as dt
+import secrets
+import time
 import zlib
 from collections import Counter, defaultdict
 from html import escape
@@ -19,6 +21,7 @@ from aiogram.types import InlineKeyboardButton
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 import analytics
+import claims
 import config
 from analytics import KINDS, MSK, fmt_time, since
 
@@ -83,15 +86,28 @@ async def cmd_start(message: types.Message) -> None:
             "Передайте его разработчику — после этого сюда пойдут КП и статистика."
         )
         return
+    parts = (message.text or "").split(maxsplit=1)
+    arg = parts[1].strip() if len(parts) > 1 else ""
+    if arg.startswith("rec_"):  # ссылка-приглашение рекламациониста от владельца
+        await _join_recipient(message, arg[4:])
+        return
     if not _allowed(message.from_user):
-        await message.answer("Доступ закрыт.")
+        if _is_recipient(message.from_user.id):
+            await message.answer(REC_HELLO)
+        else:
+            await message.answer("Доступ закрыт.")
         return
     await message.answer("👋 <b>Creatica · панель владельца</b>\n" + HELP, reply_markup=reply_menu())
 
 
+REC_HELLO = ("👋 Вы подключены как <b>рекламационист</b> Creatica.\n"
+             "Заявки от менеджеров будут приходить сюда. Под каждой заявкой кнопки: "
+             "«🛠 Взял в работу» и «✅ Решена» — менеджер и руководитель получат отбивку.")
+
+
 async def _guard(message: types.Message) -> bool:
     if not _allowed(message.from_user):
-        await message.answer("Доступ закрыт.")
+        await message.answer(REC_HELLO if _is_recipient(message.from_user.id) else "Доступ закрыт.")
         return False
     return True
 
@@ -460,6 +476,263 @@ async def cb_status_files(call: types.CallbackQuery) -> None:
         await call.message.answer("Файлы этих КП недоступны (старые записи или сообщения удалены из чата).")
 
 
+# --- рекламации: кому приходят, кнопки «в работе / решена», отбивки ---------------------------------
+
+
+def _recipients() -> list[dict]:
+    return analytics.SETTINGS.setdefault("rec_users", [])
+
+
+def _is_recipient(uid: int) -> bool:
+    return any(u["id"] == uid for u in _recipients())
+
+
+def _can_act(user: types.User | None) -> bool:
+    return bool(user) and (_allowed(user) or _is_recipient(user.id))
+
+
+def claim_chats() -> list[int]:
+    """Кому уходит заявка: рекламационисты + владельцы (владелец получает всё)."""
+    return [u["id"] for u in _recipients()] + list(config.ADMIN_CHAT_IDS)
+
+
+async def push_recipients() -> None:
+    """Сообщить сайту, кому слать заявки с сайта (сайт — отдельная программа, сам этого не знает)."""
+    if config.ADMIN_BOT_TOKEN:
+        await claims.web_call(config.ADMIN_BOT_TOKEN, "/internal/recipients",
+                              {"users": _recipients(), "owners": list(config.ADMIN_CHAT_IDS)})
+
+
+async def sync_loop() -> None:
+    await asyncio.sleep(90)
+    while True:
+        try:
+            await push_recipients()
+        except Exception:  # noqa: BLE001
+            pass
+        await asyncio.sleep(6 * 3600)
+
+
+async def _owners_say(bot: Bot, text: str, skip: int | None = None) -> None:
+    for chat in config.ADMIN_CHAT_IDS:
+        if chat == skip:
+            continue
+        try:
+            await bot.send_message(chat, text)
+        except Exception:  # noqa: BLE001
+            pass
+
+
+async def _join_recipient(message: types.Message, token: str) -> None:
+    tokens = analytics.SETTINGS.setdefault("rec_tokens", {})
+    ts = tokens.get(token)
+    if ts is None or time.time() - ts > 3 * 86400:
+        await message.answer("Эта ссылка недействительна или устарела. Попросите руководителя прислать новую.")
+        return
+    tokens.pop(token, None)
+    user = message.from_user
+    if not _is_recipient(user.id):
+        _recipients().append({"id": user.id, "name": user.full_name, "username": user.username or ""})
+    analytics.save_state()
+    await message.answer(REC_HELLO)
+    await _owners_say(message.bot, f"✅ Рекламационист подключён: <b>{escape(user.full_name)}</b>"
+                                   + (f" (@{escape(user.username)})" if user.username else ""))
+    asyncio.create_task(push_recipients())
+
+
+def _cfg_view() -> tuple[str, types.InlineKeyboardMarkup]:
+    users = _recipients()
+    lines = ["⚙ <b>Настройки</b>", "", "📣 <b>Рекламации — кому приходят заявки от менеджеров:</b>"]
+    lines += [f"• {escape(u['name'])}" + (f" (@{escape(u['username'])})" if u.get("username") else "") for u in users] \
+        or ["пока никому — заявки приходят только вам"]
+    lines += ["", "Вы в любом случае получаете копию каждой заявки и каждой отбивки (взяли в работу / решена)."]
+    b = InlineKeyboardBuilder()
+    for u in users:
+        b.row(InlineKeyboardButton(text=f"❌ Убрать: {u['name'][:30]}", callback_data=f"a:cfg:del:{u['id']}"))
+    b.row(InlineKeyboardButton(text="➕ Пригласить рекламациониста (ссылка)", callback_data="a:cfg:inv"))
+    me = config.ADMIN_CHAT_IDS[0] if config.ADMIN_CHAT_IDS else None
+    if me and not _is_recipient(me):
+        b.row(InlineKeyboardButton(text="➕ Добавить себя", callback_data="a:cfg:me"))
+    return "\n".join(lines), b.as_markup()
+
+
+@router.callback_query(F.data.startswith("a:cfg:"))
+async def cb_cfg(call: types.CallbackQuery) -> None:
+    if not _allowed(call.from_user):
+        await call.answer("Доступ закрыт", show_alert=True)
+        return
+    parts = call.data.split(":")
+    action = parts[2]
+    if action == "inv":
+        token = secrets.token_urlsafe(8)
+        analytics.SETTINGS.setdefault("rec_tokens", {})[token] = int(time.time())
+        analytics.save_state()
+        me = await call.bot.me()
+        await call.message.answer(
+            "🔗 <b>Ссылка для рекламациониста</b> (одноразовая, действует 3 дня):\n"
+            f"https://t.me/{me.username}?start=rec_{token}\n\n"
+            "Перешлите её сотруднику: он откроет ссылку, нажмёт «Старт» — и заявки пойдут ему.")
+        await call.answer()
+        return
+    if action == "me":
+        user = call.from_user
+        if not _is_recipient(user.id):
+            _recipients().append({"id": user.id, "name": user.full_name, "username": user.username or ""})
+    elif action == "del":
+        analytics.SETTINGS["rec_users"] = [u for u in _recipients() if u["id"] != int(parts[3])]
+    analytics.save_state()
+    asyncio.create_task(push_recipients())
+    text, markup = _cfg_view()
+    try:
+        await call.message.edit_text(text, reply_markup=markup)
+    except Exception:  # noqa: BLE001
+        pass
+    await call.answer("Готово")
+
+
+PENDING_COMMENT: dict[int, tuple[str, float]] = {}  # кто сейчас пишет комментарий к заявке
+
+
+async def _get_claim(cid: str) -> dict | None:
+    if cid.startswith("b"):
+        return analytics.CLAIMS.get(cid)
+    res = await claims.web_call(config.ADMIN_BOT_TOKEN, "/internal/claim", {"id": cid})
+    return (res or {}).get("claim")
+
+
+async def _set_status(cid: str, status: str, actor: str) -> tuple[dict | None, bool, bool]:
+    """-> (заявка, изменилась ли, ответил ли сайт)."""
+    if cid.startswith("b"):
+        c = analytics.CLAIMS.get(cid)
+        if c is None:
+            return None, False, True
+        changed = claims.apply_status(c, status, actor)
+        if changed:
+            analytics.save_state()
+        return c, changed, True
+    res = await claims.web_call(config.ADMIN_BOT_TOKEN, "/internal/status", {"id": cid, "status": status, "by": actor})
+    if res is None:
+        return None, False, False
+    return res.get("claim"), bool(res.get("changed")), True
+
+
+@router.callback_query(F.data.regexp(r"^rc:[bw]\d+:[wd]$"))
+async def cb_claim(call: types.CallbackQuery) -> None:
+    if not _can_act(call.from_user):
+        await call.answer("Нет доступа", show_alert=True)
+        return
+    _, cid, act = call.data.split(":")
+    status = "work" if act == "w" else "done"
+    actor = call.from_user.full_name
+    await call.answer()
+    c, changed, online = await _set_status(cid, status, actor)
+    if not online:
+        await call.message.answer("⚠ Сайт сейчас не отвечает — нажмите кнопку ещё раз через минуту.")
+        return
+    if c is None:
+        await call.message.answer("Заявка не найдена.")
+        return
+    try:  # кнопка могла быть на копии, которой нет в списке сообщений заявки
+        await call.message.edit_text(claims.claim_text(c), reply_markup=claims.claim_markup(c))
+    except Exception:  # noqa: BLE001
+        pass
+    if not changed:
+        return  # уже было нажато — просто показали актуальное состояние
+    await claims.refresh(call.bot, c)
+    n = claims.number(c)
+    order = claims.esc(c.get("order"))
+    if status == "work":
+        msg = f"🛠 <b>Рекламация №{n} взята в работу</b>\nЗаказ: {order}\nЗаявку ведёт: {claims.esc(actor)}"
+    else:
+        msg = f"✅ <b>Рекламация №{n} решена</b>\nЗаказ: {order}\nОтметил: {claims.esc(actor)}"
+    await claims.notify_requester(c, msg)  # менеджеру, который подал заявку
+    await _owners_say(call.bot, msg + f"\nМенеджер: {claims.esc((c.get('by') or {}).get('name'))}", skip=call.from_user.id)
+    PENDING_COMMENT[call.from_user.id] = (cid, time.time())
+    b = InlineKeyboardBuilder()
+    b.row(InlineKeyboardButton(text="Без комментария", callback_data=f"rcx:{cid}"))
+    await call.message.answer(f"💬 Хотите добавить комментарий для менеджера по заявке №{n}? "
+                              "Просто напишите его сообщением — я перешлю менеджеру и руководителю.",
+                              reply_markup=b.as_markup())
+
+
+@router.callback_query(F.data.startswith("rcx:"))
+async def cb_claim_nocomment(call: types.CallbackQuery) -> None:
+    PENDING_COMMENT.pop(call.from_user.id, None)
+    await call.answer("Хорошо")
+    try:
+        await call.message.edit_reply_markup(reply_markup=None)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _is_comment(message: types.Message) -> bool:
+    pending = PENDING_COMMENT.get(message.from_user.id) if message.from_user else None
+    if not pending or time.time() - pending[1] > 900:
+        return False
+    text = message.text or ""
+    return bool(text) and not text.startswith("/") and text not in ADMIN_TEXT
+
+
+@router.message(F.text, _is_comment)
+async def msg_claim_comment(message: types.Message) -> None:
+    cid, _ = PENDING_COMMENT.pop(message.from_user.id)
+    actor = message.from_user.full_name
+    text = message.text.strip()
+    if cid.startswith("b"):
+        c = analytics.CLAIMS.get(cid)
+        if c is not None:
+            claims.add_comment(c, actor, text)
+            analytics.save_state()
+    else:
+        res = await claims.web_call(config.ADMIN_BOT_TOKEN, "/internal/comment", {"id": cid, "by": actor, "text": text})
+        c = (res or {}).get("claim")
+        if res is None:
+            await message.answer("⚠ Сайт не ответил — комментарий не сохранился, напишите ещё раз позже.")
+            return
+    if c is None:
+        await message.answer("Заявка не найдена.")
+        return
+    await claims.refresh(message.bot, c)
+    out = (f"💬 <b>Комментарий по рекламации №{claims.number(c)}</b> ({claims.esc(actor)}):\n{claims.esc(text)}")
+    await claims.notify_requester(c, out)
+    await _owners_say(message.bot, out, skip=message.from_user.id)
+    await message.answer("✔ Комментарий отправлен менеджеру и руководителю.")
+
+
+async def claims_report() -> tuple[str, types.InlineKeyboardMarkup]:
+    items = list(analytics.CLAIMS.values())
+    res = await claims.web_call(config.ADMIN_BOT_TOKEN, "/internal/claims", {})
+    if res and res.get("claims"):
+        items += res["claims"]
+    items.sort(key=lambda c: -c["ts"])
+    cnt = Counter(c["status"] for c in items)
+    if not items:
+        return "📣 Рекламаций пока не было.", types.InlineKeyboardMarkup(inline_keyboard=[])
+    lines = [f"📣 <b>Рекламации</b>: 🆕 {cnt['new']} · 🛠 {cnt['work']} · ✅ {cnt['done']}"
+             + ("" if res is not None else "\n<i>(сайт не ответил — заявки с сайта не показаны)</i>")]
+    b = InlineKeyboardBuilder()
+    for c in items[:15]:
+        lines.append("\n" + claims.short_line(c))
+        if c["status"] != "done":
+            b.row(InlineKeyboardButton(text=f"Открыть №{claims.number(c)}", callback_data=f"rv:{c['id']}"))
+    if len(items) > 15:
+        lines.append(f"\n<i>Показаны последние 15 из {len(items)}.</i>")
+    return "\n".join(lines)[:4000], b.as_markup()
+
+
+@router.callback_query(F.data.regexp(r"^rv:[bw]\d+$"))
+async def cb_claim_view(call: types.CallbackQuery) -> None:
+    if not _allowed(call.from_user):
+        await call.answer("Доступ закрыт", show_alert=True)
+        return
+    c = await _get_claim(call.data.split(":")[1])
+    await call.answer()
+    if c is None:
+        await call.message.answer("Заявка не найдена (или сайт не отвечает).")
+        return
+    await call.message.answer(claims.claim_text(c), reply_markup=claims.claim_markup(c))
+
+
 # --- постоянное меню под полем ввода (две колонки) -------------------------------------------------
 
 ADMIN_MENU = [
@@ -468,7 +741,8 @@ ADMIN_MENU = [
     ("🔍 КП по менеджеру", "fm"), ("🔍 КП по шоу-руму", "fr"),
     ("🕒 Лента действий", "feed"), ("📈 По дням", "days"),
     ("📅 Период отчётов", "period"), ("🌅 Сводка за вчера", "digest"),
-    ("📂 КП менеджера: статусы", "status"), ("ℹ Помощь", "help"),
+    ("📂 КП менеджера: статусы", "status"), ("📣 Рекламации", "claims"),
+    ("⚙ Настройки", "settings"), ("ℹ Помощь", "help"),
 ]
 ADMIN_TEXT = dict(ADMIN_MENU)
 PERIOD: dict[int, str] = {}  # выбранный период отчётов у каждого владельца
@@ -495,6 +769,12 @@ async def on_admin_button(message: types.Message) -> None:
                              reply_markup=menu_markup(period))
     elif kind == "status":
         text, markup = _status_picker()
+        await message.answer(text, reply_markup=markup)
+    elif kind == "claims":
+        text, markup = await claims_report()
+        await message.answer(text, reply_markup=markup)
+    elif kind == "settings":
+        text, markup = _cfg_view()
         await message.answer(text, reply_markup=markup)
     elif kind in ("fm", "fr"):
         text, markup = _picker(kind, period)

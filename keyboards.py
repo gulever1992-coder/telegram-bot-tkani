@@ -9,7 +9,8 @@ MENU_ITEMS = [
     ("📝 Заявление на возврат", "refund"), ("⚖ Выплата пени", "penalty"), ("🏷 Ценник на мебель", "tag"),
     ("📋 Коммерческое предложение", "kp"), ("📄 Мои КП", "mykp"),
     ("📈 Планируемые продажи", "pipeline"), ("🚚 Стоимость доставки", "delivery"),
-    ("🏢 Карточка организации", "cards"), ("👤 Мой профиль", "profile"),
+    ("🏢 Карточка организации", "cards"), ("📣 Рекламация", "claim"),
+    ("👤 Мой профиль", "profile"),
 ]
 MENU_TEXT = dict(MENU_ITEMS)
 
@@ -27,6 +28,7 @@ WELCOME_FULL = (
     "📈 <b>Планируемые продажи</b> — ваши сделки; ✅ продажа состоялась, ❌ сорвалась (с причиной)\n"
     "🚚 <b>Стоимость доставки</b> — Москва, СПб и регионы, сборка из прайса\n"
     "🏢 <b>Карточка организации</b> — реквизиты ООО «Феникс» и ИП Сабиров в Word\n"
+    "📣 <b>Рекламация</b> — передать заявку рекламационисту и следить за статусом\n"
     "👤 <b>Мой профиль</b> — ваши контакты для КП\n"
     "\n"
     "<b>🛠 В разработке (ещё не закончено):</b>\n"
@@ -65,6 +67,7 @@ def main_menu() -> InlineKeyboardMarkup:
     builder.row(InlineKeyboardButton(text="📈 Планируемые продажи", callback_data="menu:pipeline"))
     builder.row(InlineKeyboardButton(text="🚚 Стоимость доставки", callback_data="menu:delivery"))
     builder.row(InlineKeyboardButton(text="🏢 Карточка организации", callback_data="menu:cards"))
+    builder.row(InlineKeyboardButton(text="📣 Рекламация", callback_data="menu:claim"))
     builder.row(InlineKeyboardButton(text="👤 Мой профиль", callback_data="menu:profile"))
     return builder.as_markup()
 

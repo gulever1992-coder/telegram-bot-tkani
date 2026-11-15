@@ -23,6 +23,7 @@ import profiles
 import config
 from utils.ui import show
 import keyboards as kb
+from onboarding import norm_phone
 from refund_flow import router as refund_router
 from tag_flow import router as tag_router
 from kp_flow import router as kp_router
@@ -31,10 +32,12 @@ from pipeline_flow import router as pipeline_router
 from delivery_flow import router as delivery_router
 from company_flow import router as company_router
 from penalty_flow import router as penalty_router
+from claim_flow import router as claim_router
 from quickmenu import router as quick_router
 from utils import images as legacy_images
 from utils import fabrics, nano, sheets
 from utils.agency import AgencyData, build_agency_package
+PERSON_TAX = 0.20  # налог за вывод денег физ. лица
 
 WELCOME_TEXT = "👋 Привет! Я рабочий бот-помощник.\n\nВыберите действие в меню внизу 👇"
 router = Router()
@@ -51,6 +54,7 @@ dp.include_router(pipeline_router)
 dp.include_router(delivery_router)
 dp.include_router(company_router)
 dp.include_router(penalty_router)
+dp.include_router(claim_router)
 
 MSK = dt.timezone(dt.timedelta(hours=3))
 
@@ -604,12 +608,10 @@ async def pay_date(message: types.Message, state: FSMContext) -> None:
 class PersonPayForm(StatesGroup):
     order_name = State()
     designer = State()
+    phone = State()
     bank = State()
     amount = State()
     discount = State()
-
-
-PERSON_TAX = 0.20  # налог за вывод денег физ. лица
 
 
 def _money(value: float) -> str:
@@ -651,7 +653,7 @@ PAY_SKIP_NEXT = {
     PaymentForm.tax: ("tax", PaymentForm.date, "15. Дата документов (нажмите «Сегодня» или введите ДД.ММ.ГГГГ):",
                       kb.choice_keyboard("📅 Сегодня", "pay:today")),
     PersonPayForm.order_name: ("order_name", PersonPayForm.designer, "2. ФИО дизайнера (полностью):", None),
-    PersonPayForm.bank: ("bank", PersonPayForm.amount, "4. Сумма заказа, руб.:", None),
+    PersonPayForm.bank: ("bank", PersonPayForm.amount, "5. Сумма заказа, руб.:", None),
 }
 PAY_SKIPPABLE = {str(state) for state in PAY_SKIP_NEXT}
 PAY_SKIP_DEFAULT = {"tax": "0"}  # что сохраняется при пропуске; остальные поля — «-»
@@ -687,13 +689,25 @@ async def person_order(message: types.Message, state: FSMContext) -> None:
 @router.message(PersonPayForm.designer, F.text)
 async def person_designer(message: types.Message, state: FSMContext) -> None:
     await state.update_data(designer=message.text.strip())
-    await _ask(message, state, PersonPayForm.bank, "3. Банк получателя (например: Сбербанк):")
+    await _ask(message, state, PersonPayForm.phone,
+               "3. 📱 Телефон дизайнера, <b>на который нужен перевод</b> (например: +7 999 123-45-67):")
+
+
+@router.message(PersonPayForm.phone, F.text)
+async def person_phone(message: types.Message, state: FSMContext) -> None:
+    phone = norm_phone(message.text)
+    if not phone:
+        await message.answer("Не похоже на номер телефона. Формат: +7 999 123-45-67 (10 или 11 цифр). Ещё раз:",
+                             reply_markup=kb.cancel_keyboard())
+        return
+    await state.update_data(phone=phone)
+    await _ask(message, state, PersonPayForm.bank, "4. Банк получателя (например: Сбербанк):")
 
 
 @router.message(PersonPayForm.bank, F.text)
 async def person_bank(message: types.Message, state: FSMContext) -> None:
     await state.update_data(bank=message.text.strip())
-    await _ask(message, state, PersonPayForm.amount, "4. Сумма заказа, руб.:")
+    await _ask(message, state, PersonPayForm.amount, "5. Сумма заказа, руб.:")
 
 
 @router.message(PersonPayForm.amount, F.text)
@@ -703,7 +717,7 @@ async def person_amount(message: types.Message, state: FSMContext) -> None:
         await message.answer("Введите сумму числом, например 111868. Ещё раз:", reply_markup=kb.cancel_keyboard())
         return
     await state.update_data(amount=value)
-    await _ask(message, state, PersonPayForm.discount, "5. Процент дизайнера (скидка), %:")
+    await _ask(message, state, PersonPayForm.discount, "6. Процент дизайнера (скидка), %:")
 
 
 @router.message(PersonPayForm.discount, F.text)
@@ -719,11 +733,12 @@ async def person_discount(message: types.Message, state: FSMContext) -> None:
     body = (
         f"Заказ / клиент: {d['order_name']}\n"
         f"Дизайнер: {d['designer']}\n"
+        f"📱 Телефон для перевода: {d['phone']}\n"
         f"Банк получателя: {d['bank']}\n"
         f"Сумма заказа: {_money(d['amount'])} ₽\n\n"
         f"Процент дизайнера: {_money(value)} %\n"
         f"Вознаграждение: {_money(reward)} ₽\n"
-        f"Налог за вывод (20%): −{_money(tax)} ₽\n"
+        f"Налог за вывод ({PERSON_TAX * 100:g}%): −{_money(tax)} ₽\n"
         f"<b>К переводу на карту: {_money(payout)} ₽</b>"
     )
     analytics.notify(f"💵 <b>Выплата дизайнеру — перевод на карту</b>\n{analytics.who(message.chat.id)}\n\n{body}")

@@ -7,6 +7,7 @@ import asyncio
 import logging
 
 import analytics
+import claims
 import config
 from core import dp, make_bot
 
@@ -16,6 +17,7 @@ log = logging.getLogger("bot")
 
 async def main() -> None:
     bot = make_bot()
+    claims.main_bot = bot  # админ-бот шлёт через него отбивки менеджерам по рекламациям
     await bot.delete_webhook(drop_pending_updates=True)
     tasks = [asyncio.create_task(dp.start_polling(bot), name="main-bot")]
     from utils import pricelist
@@ -24,7 +26,7 @@ async def main() -> None:
 
     admin_bot = None
     if config.ADMIN_BOT_TOKEN:
-        from admin_bot import admin_dp, digest_loop, make_admin_bot
+        from admin_bot import admin_dp, digest_loop, make_admin_bot, sync_loop
 
         admin_bot = make_admin_bot()
         analytics.configure(admin_bot)
@@ -34,6 +36,7 @@ async def main() -> None:
             log.info("Админ-бот включён, событий в журнале: %s", loaded)
             tasks.append(asyncio.create_task(admin_dp.start_polling(admin_bot, handle_signals=False), name="admin-bot"))
             tasks.append(asyncio.create_task(digest_loop(admin_bot), name="digest-loop"))
+            tasks.append(asyncio.create_task(sync_loop(), name="web-sync"))  # сайту — список рекламационистов
         except Exception:  # noqa: BLE001 — сбой админ-бота не должен ронять основной
             log.exception("Админ-бот не запустился, продолжаю без него")
             analytics.configure(None)
