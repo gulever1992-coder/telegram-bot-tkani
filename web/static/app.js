@@ -317,24 +317,49 @@ function priceSearch(onPick, placeholder) {
   return h("div", {}, h("div", { class: "field" }, h("span", { text: "🔎 Найти в прайсе" }), h("div", { class: "row", style: "flex-wrap:nowrap" }, q, go)), res);
 }
 
+// Вставка картинки из буфера (Ctrl+V): окно с фото регистрирует себя, глобальный обработчик отдаёт картинку тому,
+// где стоит курсор (иначе — первому на экране, т. е. основному фото позиции).
+const PASTE = [];
+function onPaste(el, fn) { PASTE.push({ el, fn }); }
+document.addEventListener("paste", e => {
+  const files = [...(e.clipboardData ? e.clipboardData.items : [])].filter(i => i.type.startsWith("image/")).map(i => i.getAsFile()).filter(Boolean);
+  if (!files.length) return;  // обычный текст — вставляется как всегда
+  const live = PASTE.filter(t => t.el.isConnected);
+  PASTE.splice(0, PASTE.length, ...live);
+  if (!live.length) return;
+  const t = live.find(x => x.el.contains(document.activeElement)) || live[0];
+  e.preventDefault();
+  t.fn(files);
+});
+
+async function uploadPhoto(file) {
+  const fd = new FormData(); fd.append("file", file, file.name || "paste.png");
+  const r = await fetch("/api/photo", { method: "POST", body: fd, credentials: "same-origin" });
+  const d = await r.json();
+  if (!r.ok) throw new Error(d.error || "Фото не загрузилось");
+  return d.id;
+}
+
 function photoField(obj, label) {
   const img = h("img", { class: "thumb", style: "width:90px;height:90px", src: obj.photo_id ? "/api/photo?id=" + encodeURIComponent(obj.photo_id) : "", alt: "" });
   if (!obj.photo_id) img.classList.add("hidden");
   const file = h("input", { type: "file", accept: "image/*", style: "padding:8px" });
   const del = h("button", { type: "button", class: "ghost small" + (obj.photo_id ? "" : " hidden"), text: "Убрать фото",
     onclick: () => { obj.photo_id = null; img.classList.add("hidden"); del.classList.add("hidden"); file.value = ""; } });
-  file.onchange = async () => {
-    if (!file.files[0]) return;
-    const fd = new FormData(); fd.append("file", file.files[0]);
+  async function take(f) {
     const st = h("span", { class: "spin" }); file.after(st);
     try {
-      const r = await fetch("/api/photo", { method: "POST", body: fd, credentials: "same-origin" });
-      const d = await r.json();
-      if (!r.ok) throw new Error(d.error || "Фото не загрузилось");
-      obj.photo_id = d.id; img.src = "/api/photo?id=" + encodeURIComponent(d.id); img.classList.remove("hidden"); del.classList.remove("hidden");
-    } catch (e) { toast(e.message); file.value = ""; } finally { st.remove(); }
-  };
-  return field(label, h("div", { class: "row" }, img, h("div", { style: "flex:1;min-width:200px" }, file, del)));
+      const id = await uploadPhoto(f);
+      obj.photo_id = id; img.src = "/api/photo?id=" + encodeURIComponent(id); img.classList.remove("hidden"); del.classList.remove("hidden");
+    } catch (e) { toast(e.message); file.value = ""; return false; } finally { st.remove(); }
+    return true;
+  }
+  file.onchange = () => { if (file.files[0]) take(file.files[0]); };
+  const box = h("div", { class: "row" }, img, h("div", { style: "flex:1;min-width:200px" }, file,
+    h("div", { class: "muted", style: "font-size:12px;margin-top:4px", text: "или вставьте картинку из буфера: Ctrl+V" }), del));
+  const f = field(label, box);
+  onPaste(f, async files => { if (await take(files[0])) toast("Картинка вставлена"); });
+  return f;
 }
 
 function kpItemEditor(index) {
@@ -768,7 +793,7 @@ async function viewClaims() {
 }
 
 function clmPhotos() {
-  const wrap = h("div", { class: "field" }, h("span", { text: `Фото (до 8)` }));
+  const wrap = h("div", { class: "field" }, h("span", { text: "Фото (до 8) — можно вставить из буфера: Ctrl+V" }));
   const row = h("div", { class: "row" });
   const file = h("input", { type: "file", accept: "image/*", multiple: true, style: "padding:8px" });
   function draw() {
@@ -777,20 +802,16 @@ function clmPhotos() {
       h("button", { type: "button", class: "icon", style: "position:absolute;top:-6px;right:-6px;padding:0 6px", text: "✕",
         onclick: () => { CLM.photos.splice(i, 1); clmSave(); draw(); } }))));
   }
-  file.onchange = async () => {
+  async function addAll(list) {
     const st = h("span", { class: "spin" }); file.after(st);
-    for (const f of [...file.files]) {
+    for (const f of list) {
       if (CLM.photos.length >= 8) { toast("Максимум 8 фото"); break; }
-      const fd = new FormData(); fd.append("file", f);
-      try {
-        const r = await fetch("/api/photo", { method: "POST", body: fd, credentials: "same-origin" });
-        const d = await r.json();
-        if (!r.ok) throw new Error(d.error || "Фото не загрузилось");
-        CLM.photos.push(d.id); clmSave(); draw();
-      } catch (e) { toast(e.message); }
+      try { CLM.photos.push(await uploadPhoto(f)); clmSave(); draw(); } catch (e) { toast(e.message); }
     }
     st.remove(); file.value = "";
-  };
+  }
+  file.onchange = () => addAll([...file.files]);
+  onPaste(wrap, async files => { await addAll(files); toast("Картинка вставлена"); });
   draw();
   wrap.append(row, file);
   return wrap;
