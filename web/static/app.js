@@ -704,6 +704,11 @@ async function viewPayout() {
   const tabs = h("div", { class: "tabs" },
     h("button", { class: PAY.tab === "legal" ? "on" : "", text: "🏢 Юрлицо — по счёту", onclick: () => { PAY.tab = "legal"; paySave(); viewPayout(); } }),
     h("button", { class: PAY.tab === "person" ? "on" : "", text: "👤 Физлицо — на карту", onclick: () => { PAY.tab = "person"; paySave(); viewPayout(); } }));
+  const tpl = await api("GET", "/api/payout/template");
+  const tplCard = h("div", { class: "card" },
+    h("span", { class: "label", text: "Шаблон сообщения дизайнеру" }),
+    h("p", { class: "result", style: "margin:10px 0 14px", text: tpl.text }),
+    h("button", { class: "small", text: "📋 Скопировать шаблон", onclick: () => navigator.clipboard.writeText(tpl.text).then(() => toast("Шаблон скопирован")) }));
   if (PAY.tab === "legal") {
     const schema = await api("GET", "/api/payout/schema");
     const a = PAY.legal;
@@ -713,7 +718,7 @@ async function viewPayout() {
       try { await download("/api/payout/legal", { answers: a }); toast("Готово! Копия ушла руководителю."); }
       catch (e) { if (e.data && e.data.errors) { showErrors(form, e.data.errors); toast("Проверьте поля"); } throw e; }
     }).catch(() => {}) });
-    page("Выплата дизайнеру", "Договор, отчёт, счёт и акт — одним PDF. Пустые необязательные поля будут прочерками.", tabs, form,
+    page("Выплата дизайнеру", "Договор, отчёт, счёт и акт — одним PDF. Пустые необязательные поля будут прочерками.", tabs, tplCard, form,
       h("div", { class: "row" }, make, h("button", { class: "ghost", text: "Очистить", onclick: () => { PAY.legal = {}; paySave(); viewPayout(); } })));
     return;
   }
@@ -737,7 +742,7 @@ async function viewPayout() {
         h("p", { class: "muted", style: "font-size:13px;margin:8px 0 0", text: "Расчёт ушёл руководителю." })));
     } catch (e) { if (e.data && e.data.errors) showErrors(form, e.data.errors); throw e; }
   }).catch(() => {}) });
-  page("Выплата дизайнеру", "Перевод на карту физлицу: вознаграждение = сумма заказа × процент, минус 20%.", tabs, form, go, h("div", { style: "height:14px" }), out);
+  page("Выплата дизайнеру", "Перевод на карту физлицу: вознаграждение = сумма заказа × процент, минус 20%.", tabs, tplCard, form, go, h("div", { style: "height:14px" }), out);
 }
 
 // =================================================================================================

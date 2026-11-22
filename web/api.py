@@ -19,6 +19,7 @@ import pipeline
 import refund_flow
 from utils import cards, fabrics, pricelist, regions
 from utils.agency import AgencyData, build_agency_package
+from utils.designer_msg import DESIGNER_TEMPLATE
 from utils.kp import PAYMENTS, build_kp_pdf, build_kp_preview, prep_photo, rub
 from utils.refund import REFUND_COMPANIES, build_refund_branded, build_refund_docx
 from utils.statement import money
@@ -542,6 +543,11 @@ PAYOUT_FIELDS = [
     ("tax", "Налогообложение, % (0–100; пусто — 0)", "tax", False),
     ("date", "Дата документов (ДД.ММ.ГГГГ; пусто — сегодня)", "date", False),
 ]
+
+
+@routes.get("/api/payout/template")
+async def payout_template(request: web.Request) -> web.Response:
+    return web.json_response({"text": DESIGNER_TEMPLATE})
 
 
 @routes.get("/api/payout/schema")

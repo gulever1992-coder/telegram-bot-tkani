@@ -8,6 +8,7 @@ from __future__ import annotations
 import asyncio
 import datetime as dt
 import hashlib
+import html
 import re
 
 from aiogram import Bot, Dispatcher, F, Router, types
@@ -37,6 +38,7 @@ from quickmenu import router as quick_router
 from utils import images as legacy_images
 from utils import fabrics, nano, sheets
 from utils.agency import AgencyData, build_agency_package
+from utils.designer_msg import DESIGNER_TEMPLATE
 PERSON_TAX = 0.20  # налог за вывод денег физ. лица
 
 WELCOME_TEXT = "👋 Привет! Я рабочий бот-помощник.\n\nВыберите действие в меню внизу 👇"
@@ -382,6 +384,11 @@ async def cb_payment(call: types.CallbackQuery, state: FSMContext) -> None:
     ])
     await show(call.message, "💵 <b>Выплата дизайнеру</b>\nВыберите тип дизайнера:", reply_markup=markup)
     await call.answer()
+    # шаблон для дизайнера — отдельным сообщением: нажатие на текст копирует его целиком
+    await call.message.answer(
+        "💬 <b>Шаблон для дизайнера</b> — нажмите на текст, чтобы скопировать, "
+        "и отправьте, заменив то, что в скобках:\n\n"
+        f"<pre>{html.escape(DESIGNER_TEMPLATE)}</pre>")
 
 
 @router.callback_query(F.data == "pay:type:legal")
