@@ -388,7 +388,19 @@ def signer_name(kind: str, a: dict) -> str:
 
 
 def build_refund_branded(company: str, kind: str, a: dict) -> bytes:
-    from utils.statement import Statement, build_statement_pdf
+    from utils.statement import build_statement_pdf
+
+    return build_statement_pdf(refund_statement(company, kind, a))
+
+
+def build_refund_docx(company: str, kind: str, a: dict) -> bytes:
+    from utils.statement import build_statement_docx
+
+    return build_statement_docx(refund_statement(company, kind, a))
+
+
+def refund_statement(company: str, kind: str, a: dict):
+    from utils.statement import Statement
 
     co = REFUND_COMPANIES[company]
     d = a.get("purchase_date")
@@ -402,7 +414,7 @@ def build_refund_branded(company: str, kind: str, a: dict) -> bytes:
     ]
     if a.get("reason"):
         paragraphs.append(f"Причина возврата: {a['reason']}.")
-    return build_statement_pdf(Statement(
+    return Statement(
         title="Заявление покупателя о возврате денежных средств",
         to_lines=list(co["header_lines"]),
         from_lines=buyer_lines(kind, a),
@@ -414,4 +426,4 @@ def build_refund_branded(company: str, kind: str, a: dict) -> bytes:
         signer=signer_name(kind, a),
         date=a.get("doc_date") if isinstance(a.get("doc_date"), dt.date) else None,
         attachment="Приложение: акт на возврат",
-    ))
+    )

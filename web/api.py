@@ -20,7 +20,7 @@ import refund_flow
 from utils import cards, fabrics, pricelist, regions
 from utils.agency import AgencyData, build_agency_package
 from utils.kp import PAYMENTS, build_kp_pdf, build_kp_preview, prep_photo, rub
-from utils.refund import REFUND_COMPANIES, build_refund_branded
+from utils.refund import REFUND_COMPANIES, build_refund_branded, build_refund_docx
 from utils.statement import money
 from utils.tag import Tag, build_tag_docx, build_tag_pdf, build_tag_preview
 from web import auth, notify
@@ -42,6 +42,9 @@ def _uid(request: web.Request) -> str:
 
 def err(message: str, status: int = 400) -> web.Response:
     return web.json_response({"error": message}, status=status)
+
+
+DOCX_TYPE = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
 
 
 def file_response(data: bytes, filename: str, ctype: str) -> web.Response:
@@ -501,19 +504,23 @@ async def docs_make(request: web.Request) -> web.Response:
     label = REFUND_COMPANIES[company]["label"]
     kind_ru = "физлицо" if kind == "fiz" else "юрлицо"
     stamp = a.get("doc_date") or _today()
+    word = b.get("format") == "docx"
     if doc == "refund":
         if a.get("passport"):
             a["passport_series"], a["passport_number"] = a["passport"][:4], a["passport"][4:]
-        pdf = await asyncio.to_thread(build_refund_branded, company, kind, a)
+        pdf = await asyncio.to_thread(build_refund_docx if word else build_refund_branded, company, kind, a)
         name = f"Zayavlenie_vozvrat_{company}_{'fizlico' if kind == 'fiz' else 'yurlico'}_{stamp:%Y%m%d}.pdf"
         caption = f"📝 Заявление на возврат: {label}, {kind_ru}\n{notify.who(user)}"
     else:
-        from utils.statement import build_statement_pdf
-        pdf = await asyncio.to_thread(build_statement_pdf, penalty_flow._statement(company, kind, a))
+        from utils.statement import build_statement_docx, build_statement_pdf
+        pdf = await asyncio.to_thread(build_statement_docx if word else build_statement_pdf,
+                                      penalty_flow._statement(company, kind, a))
         name = f"Zayavlenie_peni_{company}_{stamp:%Y%m%d}.pdf"
         caption = f"⚖ Заявление на выплату пени: {label}, {kind_ru}, {money(a.get('amount') or 0)}\n{notify.who(user)}"
+    if word:
+        name = name[:-4] + ".docx"
     notify.document(pdf, name, caption)
-    return file_response(pdf, name, "application/pdf")
+    return file_response(pdf, name, DOCX_TYPE if word else "application/pdf")
 
 
 # --- выплата дизайнеру -----------------------------------------------------------------------------

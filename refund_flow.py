@@ -17,7 +17,7 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 import analytics
 import keyboards as kb
 from utils.ui import show
-from utils.refund import REFUND_COMPANIES, build_refund_branded
+from utils.refund import REFUND_COMPANIES, build_refund_branded, build_refund_docx
 
 router = Router()
 MSK = dt.timezone(dt.timedelta(hours=3))
@@ -182,6 +182,7 @@ async def _finish(target: types.Message, state: FSMContext) -> None:
             a[key] = ""
     status = await target.answer("⏳ Готовлю заявление...")
     pdf_bytes = await asyncio.to_thread(build_refund_branded, data["company"], data["kind"], a)
+    docx_bytes = await asyncio.to_thread(build_refund_docx, data["company"], data["kind"], a)
     who = "fizlico" if data["kind"] == "fiz" else "yurlico"
     stamp = a.get("doc_date") or dt.datetime.now(MSK).date()
     name = f"Zayavlenie_vozvrat_{data['company']}_{who}_{stamp:%Y%m%d}.pdf"
@@ -190,7 +191,9 @@ async def _finish(target: types.Message, state: FSMContext) -> None:
     analytics.track(target.chat.id, "refund", f"{data['company']} / {data['kind']}", document=(pdf_bytes, name),
                     caption=f"📝 Заявление на возврат: {label}, {kind_ru}\n{analytics.who(target.chat.id)}")
     LAST[target.chat.id] = {"company": data["company"], "kind": data["kind"], "answers": dict(data["answers"])}
+    WORD[(target.chat.id, "ref")] = (docx_bytes, name[:-4] + ".docx")
     follow = InlineKeyboardBuilder()
+    follow.row(InlineKeyboardButton(text="📝 Скачать в Word", callback_data="word:ref"))
     follow.row(InlineKeyboardButton(text="⚖ Оформить и пени (те же данные)", callback_data="ref:topenalty"))
     follow.row(InlineKeyboardButton(text="🏠 В главное меню", callback_data="menu:home"))
     await target.answer_document(
@@ -200,6 +203,20 @@ async def _finish(target: types.Message, state: FSMContext) -> None:
     )
     await status.delete()
     await state.clear()
+
+
+WORD: dict[tuple[int, str], tuple[bytes, str]] = {}  # последний Word-файл заявления: (чат, ref|pen) -> (байты, имя)
+
+
+@router.callback_query(F.data.in_({"word:ref", "word:pen"}))
+async def cb_word(call: types.CallbackQuery) -> None:
+    item = WORD.get((call.message.chat.id, call.data.split(":")[1]))
+    if not item:
+        await call.answer("Файл устарел — оформите заявление заново.", show_alert=True)
+        return
+    await call.message.answer_document(BufferedInputFile(item[0], filename=item[1]),
+                                       caption="Заявление в Word — можно поправить и распечатать.")
+    await call.answer()
 
 
 # --- выбор кнопками -----------------------------------------------------------

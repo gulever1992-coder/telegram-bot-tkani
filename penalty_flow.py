@@ -16,9 +16,9 @@ from aiogram.types import BufferedInputFile, InlineKeyboardButton
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 import analytics
-from refund_flow import CARD, LAST, Step, _parse
+from refund_flow import CARD, LAST, WORD, Step, _parse
 from utils.refund import MONTHS, REFUND_COMPANIES, buyer_lines, money_words, payout_section, signer_name
-from utils.statement import Statement, build_statement_pdf, money
+from utils.statement import Statement, build_statement_docx, build_statement_pdf, money
 from utils.ui import show
 
 router = Router()
@@ -233,7 +233,9 @@ async def _finish(target: types.Message, state: FSMContext) -> None:
         if a.get(key) == "-":
             a[key] = ""
     status = await target.answer("⏳ Готовлю заявление...")
-    pdf = await asyncio.to_thread(build_statement_pdf, _statement(data["company"], data["kind"], a))
+    st = _statement(data["company"], data["kind"], a)
+    pdf = await asyncio.to_thread(build_statement_pdf, st)
+    docx_bytes = await asyncio.to_thread(build_statement_docx, st)
     label = REFUND_COMPANIES[data["company"]]["label"]
     kind_ru = "физлицо" if data["kind"] == "fiz" else "юрлицо"
     stamp = a.get("doc_date") or _today()
@@ -242,7 +244,9 @@ async def _finish(target: types.Message, state: FSMContext) -> None:
                     caption=f"⚖ Заявление на выплату пени: {label}, {kind_ru}, {money(a.get('amount') or 0)}\n"
                             f"{analytics.who(target.chat.id)}")
     LAST[target.chat.id] = {"company": data["company"], "kind": data["kind"], "answers": dict(data["answers"])}
+    WORD[(target.chat.id, "pen")] = (docx_bytes, name[:-4] + ".docx")
     b = InlineKeyboardBuilder()
+    b.row(InlineKeyboardButton(text="📝 Скачать в Word", callback_data="word:pen"))
     b.row(InlineKeyboardButton(text="📝 Оформить и возврат (те же данные)", callback_data="pen:torefund"))
     b.row(InlineKeyboardButton(text="⚖ Новое заявление", callback_data="menu:penalty"))
     b.row(InlineKeyboardButton(text="🏠 В главное меню", callback_data="menu:home"))

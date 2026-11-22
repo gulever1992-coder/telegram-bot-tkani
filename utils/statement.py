@@ -200,3 +200,73 @@ def build_statement_pdf(s: Statement) -> bytes:
     if s.attachment:
         r.text(ML, y + 40, s.attachment, size=9, color=GREY)
     return r.finish()
+
+
+def build_statement_docx(s: Statement) -> bytes:
+    """То же заявление в Word (.docx) — чтобы можно было поправить текст перед печатью."""
+    from docx import Document
+    from docx.enum.table import WD_TABLE_ALIGNMENT
+    from docx.enum.text import WD_ALIGN_PARAGRAPH
+    from docx.shared import Cm, Pt
+
+    doc = Document()
+    sec = doc.sections[0]
+    sec.left_margin, sec.right_margin = Cm(2.2), Cm(1.8)
+    sec.top_margin = sec.bottom_margin = Cm(1.8)
+    st = doc.styles["Normal"]
+    st.font.name, st.font.size = "Times New Roman", Pt(12)
+    st.paragraph_format.space_after = Pt(4)
+
+    def para(text="", bold=False, size=None, align=None, after=None, indent=None):
+        p = doc.add_paragraph()
+        if align is not None:
+            p.alignment = align
+        if after is not None:
+            p.paragraph_format.space_after = Pt(after)
+        if indent:
+            p.paragraph_format.first_line_indent = Cm(indent)
+        run = p.add_run(text)
+        run.bold = bold
+        if size:
+            run.font.size = Pt(size)
+        return p
+
+    head = doc.add_table(rows=1, cols=2)
+    head.alignment = WD_TABLE_ALIGNMENT.CENTER
+    for cell, (lab, lines) in zip(head.rows[0].cells, [("Кому:", s.to_lines), ("От кого:", s.from_lines)]):
+        cell.paragraphs[0].add_run(lab).bold = True
+        for ln in lines:
+            for part in str(ln).split("\n"):
+                cell.add_paragraph(part).paragraph_format.space_after = Pt(0)
+    para("", after=6)
+    para(s.title, bold=True, size=14, align=WD_ALIGN_PARAGRAPH.CENTER, after=10)
+    for p in s.paragraphs:
+        para(p, align=WD_ALIGN_PARAGRAPH.JUSTIFY, indent=1.25)
+    if s.amount is not None:
+        p = para("", after=2)
+        p.add_run(f"{s.amount_label}: ")
+        p.add_run(money(s.amount)).bold = True
+        if s.amount_words:
+            para(f"({s.amount_words})", after=8)
+    for title, rows in s.sections:
+        para(title + ":", bold=True, after=2)
+        tbl = doc.add_table(rows=0, cols=2)
+        tbl.style = "Table Grid"
+        for lab, value in rows:
+            c1, c2 = tbl.add_row().cells
+            c1.text, c2.text = str(lab), str(value or "—")
+            c1.width, c2.width = Cm(5.2), Cm(11.0)
+        para("", after=6)
+    para("", after=10)
+    sign = doc.add_table(rows=2, cols=3)
+    vals = ["______________", s.signer or "______________", f"{s.date:%d.%m.%Y}" if s.date else "«___» __________ 20__ г."]
+    caps = ["подпись", "расшифровка", "дата"]
+    for i in range(3):
+        sign.rows[0].cells[i].text = vals[i]
+        sign.rows[1].cells[i].paragraphs[0].add_run(caps[i]).font.size = Pt(8)
+    if s.attachment:
+        para("", after=4)
+        para(s.attachment, size=10)
+    buf = io.BytesIO()
+    doc.save(buf)
+    return buf.getvalue()

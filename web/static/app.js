@@ -676,19 +676,21 @@ async function viewDocs() {
   draw();
   if (DOC.doc === "penalty") penaltyCalc();
 
-  const make = h("button", { text: "📄 Скачать заявление (PDF)", onclick: () => busy(make, async () => {
+  const makeDoc = (btn, format) => busy(btn, async () => {
     try {
-      await download("/api/docs/" + DOC.doc, { company: DOC.company, kind: DOC.kind, answers: a });
+      await download("/api/docs/" + DOC.doc, { company: DOC.company, kind: DOC.kind, answers: a, format });
       toast("Готово! Копия ушла руководителю.");
     } catch (e) { if (e.data && e.data.errors) { showErrors(form, e.data.errors); toast("Проверьте поля, отмеченные красным"); } throw e; }
-  }).catch(() => {}) });
+  }).catch(() => {});
+  const make = h("button", { text: "📄 Скачать заявление (PDF)", onclick: () => makeDoc(make, "pdf") });
+  const makeWord = h("button", { class: "ghost", text: "📝 Скачать в Word", onclick: () => makeDoc(makeWord, "docx") });
 
   page("Заявления", "Поля можно оставлять пустыми, кроме отмеченных *. Введённое сохраняется на этом устройстве.", tabs,
     h("div", { class: "card" },
       field("Организация", chips(S.meta.companies.map(c => [c.label, c.key]), DOC.company, v => { DOC.company = v; docSave(); })),
       field("Покупатель", chips([["👤 Физическое лицо", "fiz"], ["🏢 Юридическое лицо", "yur"]], DOC.kind, v => { DOC.kind = v; docSave(); viewDocs(); }))),
     h("div", { class: "card" }, form),
-    h("div", { class: "row" }, make, h("button", { class: "ghost", text: "Очистить форму", onclick: () => { if (confirm("Очистить все поля?")) { DOC.answers = {}; docSave(); viewDocs(); } } })));
+    h("div", { class: "row" }, make, makeWord, h("button", { class: "ghost", text: "Очистить форму", onclick: () => { if (confirm("Очистить все поля?")) { DOC.answers = {}; docSave(); viewDocs(); } } })));
 }
 
 // =================================================================================================
