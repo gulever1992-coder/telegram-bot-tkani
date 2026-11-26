@@ -782,7 +782,7 @@ async def claims_report(kind: str = "claim") -> tuple[str, types.InlineKeyboardM
     res = await claims.web_call(config.ADMIN_BOT_TOKEN, "/internal/claims", {})
     if res and res.get("claims"):
         items += res["claims"]
-    items = [c for c in items if claims.kind_of(c) == kind]
+    items = [c for c in items if claims.kind_of(c) == kind and c.get("status") != "cancelled"]
     items.sort(key=lambda c: -c["ts"])
     cnt = Counter(c["status"] for c in items)
     if not items:

@@ -27,7 +27,7 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 log = logging.getLogger("claims")
 MSK = dt.timezone(dt.timedelta(hours=3))
 
-STATUS = {"new": "🆕 Новая", "work": "🛠 В работе", "done": "✅ Решена"}
+STATUS = {"new": "🆕 Новая", "work": "🛠 В работе", "done": "✅ Решена", "cancelled": "🗑 Отозвана менеджером"}
 WEB_BASE = (os.getenv("WEB_BASE_URL") or "https://creatica-web.onrender.com").rstrip("/")
 
 # основной бот (для отбивок менеджеру) — задаётся в bot.py
@@ -108,10 +108,19 @@ def claim_markup(c: dict) -> InlineKeyboardMarkup | None:
 def apply_status(c: dict, status: str, by: str) -> bool:
     """Меняет статус заявки. False — переход невозможен (уже решена / тот же статус)."""
     order = {"new": 0, "work": 1, "done": 2}
-    if status not in order or order[status] <= order[c["status"]]:
+    if status not in order or c["status"] not in order or order[status] <= order[c["status"]]:
         return False
     c["status"] = status
     c.setdefault("log", []).append({"ts": int(time.time()), "status": status, "by": by})
+    return True
+
+
+def cancel(c: dict, by: str) -> bool:
+    """Менеджер удалил (отозвал) заявку: у получателей пропадают кнопки, из списков и отчётов она уходит."""
+    if c.get("status") == "cancelled":
+        return False
+    c["status"] = "cancelled"
+    c.setdefault("log", []).append({"ts": int(time.time()), "status": "cancelled", "by": by})
     return True
 
 

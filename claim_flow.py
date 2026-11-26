@@ -78,7 +78,8 @@ def _kb(step: Step | None = None) -> types.InlineKeyboardMarkup:
 
 def _my(uid: int, kind: str = "claim") -> list[dict]:
     return sorted((c for c in analytics.CLAIMS.values()
-                   if (c.get("by") or {}).get("uid") == uid and claims.kind_of(c) == kind), key=lambda c: -c["ts"])
+                   if (c.get("by") or {}).get("uid") == uid and claims.kind_of(c) == kind
+                   and c.get("status") != "cancelled"), key=lambda c: -c["ts"])
 
 
 def _kind_arg(data: str) -> str:
@@ -131,10 +132,62 @@ async def cb_list(call: types.CallbackQuery) -> None:
         for cm in (c.get("comments") or [])[-1:]:
             lines.append(f"   💬 {claims.esc(cm['by'])}: {claims.esc(cm['text'])[:120]}")
     b = InlineKeyboardBuilder()
+    dels = [InlineKeyboardButton(text=f"🗑 Удалить №{claims.number(c)}", callback_data=f"clm:del:{c['id']}")
+            for c in mine[:12]]
+    for i in range(0, len(dels), 3):
+        b.row(*dels[i:i + 3])
     b.row(InlineKeyboardButton(text="➕ Новая заявка", callback_data=f"clm:new:{kind}"),
           InlineKeyboardButton(text="🏠 Меню", callback_data="menu:home"))
+    if not mine:
+        lines.append("\nЗаявок нет.")
     await call.message.answer("\n".join(lines)[:4000], reply_markup=b.as_markup())
     await call.answer()
+
+
+def _own_claim(call: types.CallbackQuery) -> dict | None:
+    c = analytics.CLAIMS.get(call.data.split(":")[2])
+    if not c or (c.get("by") or {}).get("uid") != call.from_user.id or c.get("status") == "cancelled":
+        return None
+    return c
+
+
+@router.callback_query(F.data.regexp(r"^clm:del:b\d+$"))
+async def cb_del(call: types.CallbackQuery) -> None:
+    c = _own_claim(call)
+    if c is None:
+        await call.answer("Заявка не найдена или уже удалена", show_alert=True)
+        return
+    k = claims.kind(c)
+    b = InlineKeyboardBuilder()
+    b.row(InlineKeyboardButton(text="🗑 Да, удалить", callback_data=f"clm:delok:{c['id']}"),
+          InlineKeyboardButton(text="↩ Не удалять", callback_data=f"clm:list:{claims.kind_of(c)}"))
+    await call.message.answer(
+        f"Удалить заявку №{claims.number(c)} · {claims.esc(c.get('order'))} · {claims.esc(c.get('client'))}?\n"
+        f"Получатель ({k['who']}) увидит, что она отозвана, кнопки у него пропадут. "
+        "Из вашего списка заявка исчезнет.", reply_markup=b.as_markup())
+    await call.answer()
+
+
+@router.callback_query(F.data.regexp(r"^clm:delok:b\d+$"))
+async def cb_del_ok(call: types.CallbackQuery) -> None:
+    c = _own_claim(call)
+    if c is None:
+        await call.answer("Заявка не найдена или уже удалена", show_alert=True)
+        return
+    kind = claims.kind_of(c)
+    claims.cancel(c, (c.get("by") or {}).get("name") or call.from_user.full_name)
+    analytics.save_state()
+    await call.answer("Удалено")
+    if analytics._admin_bot is not None:
+        await claims.refresh(analytics._admin_bot, c)
+    b = InlineKeyboardBuilder()
+    b.row(InlineKeyboardButton(text="📋 Мои заявки", callback_data=f"clm:list:{kind}"),
+          InlineKeyboardButton(text="🏠 Меню", callback_data="menu:home"))
+    try:
+        await call.message.edit_text(f"🗑 Заявка №{claims.number(c)} удалена — получатель видит, что она отозвана.",
+                                     reply_markup=b.as_markup())
+    except Exception:  # noqa: BLE001
+        pass
 
 
 # --- опрос -------------------------------------------------------------------------------------------

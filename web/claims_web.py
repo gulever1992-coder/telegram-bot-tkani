@@ -56,7 +56,8 @@ def _norm_users(raw) -> list[dict]:
 async def my_claims(request: web.Request) -> web.Response:
     uid = request["user"]["id"]
     kind = _kind(request.query.get("kind"))
-    mine = [c for c in _claims().values() if (c.get("by") or {}).get("web") == uid and claims.kind_of(c) == kind]
+    mine = [c for c in _claims().values() if (c.get("by") or {}).get("web") == uid and claims.kind_of(c) == kind
+            and c.get("status") != "cancelled"]
     mine.sort(key=lambda c: -c["ts"])
     return web.json_response({"items": [public(c) for c in mine], "recipients": [u["name"] for u in _users(kind)]})
 
@@ -93,6 +94,20 @@ async def create_claim(request: web.Request) -> web.Response:
         await claims.deliver(ADMIN_BOT, c, chats, [p for p in photos if not p.startswith("local:")])
     await STORE.flush()
     return web.json_response({"claim": public(c), "recipients": [u["name"] for u in _users(kind)]})
+
+
+@routes.delete("/api/claims/{cid}")
+async def cancel_claim(request: web.Request) -> web.Response:
+    """Менеджер удаляет свою заявку: она помечается отозванной, у получателей пропадают кнопки."""
+    user = request["user"]
+    c = _claims().get(request.match_info["cid"])
+    if c is None or (c.get("by") or {}).get("web") != user["id"]:
+        return web.json_response({"error": "Заявка не найдена."}, status=404)
+    if claims.cancel(c, user.get("name") or "менеджер"):
+        if ADMIN_BOT is not None:
+            await claims.refresh(ADMIN_BOT, c)
+        await STORE.flush()
+    return web.json_response({"ok": True})
 
 
 # --- вызовы от бота (подпись, без сессии) ----------------------------------------------------------------

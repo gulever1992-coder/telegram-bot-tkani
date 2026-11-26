@@ -755,7 +755,7 @@ const CLM_KEY = { claim: "claim", log: "claim_log" };
 const CLM_DRAFT = { claim: local.get("claim") || CLM_EMPTY(), log: local.get("claim_log") || CLM_EMPTY() };
 let CLM_KIND = "claim", CLM = CLM_DRAFT.claim;
 const clmSave = () => local.set(CLM_KEY[CLM_KIND], CLM);
-const CLM_STATUS = { new: ["🆕 Новая", ""], work: ["🛠 В работе", ""], done: ["✅ Решена", "ok"] };
+const CLM_STATUS = { new: ["🆕 Новая", ""], work: ["🛠 В работе", ""], done: ["✅ Решена", "ok"], cancelled: ["🗑 Отозвана", ""] };
 const CLM_TXT = {
   claim: { route: "claims", title: "Рекламации", to: "рекламационисту", who: "рекламационист", icon: "📣",
     item: "Изделие: модель, ткань, цвет *", main: "Проблема: что не так, когда обнаружили *" },
@@ -796,7 +796,11 @@ async function viewClaims(kind = CLM_KIND) {
         h("div", { class: "s", text: `${c.client}, ${c.client_phone} · ${c.item} · ${fmtTs(c.ts)}` }),
         h("div", { class: "s", style: "white-space:pre-wrap;color:var(--ink)", text: c.problem }),
         ...(c.log || []).map(l => h("div", { class: "s", text: `${CLM_STATUS[l.status][0]} — ${l.by}, ${fmtTs(l.ts)}` })),
-        ...(c.comments || []).map(cm => h("div", { class: "s", style: "color:var(--ink)", text: `💬 ${cm.by}: ${cm.text}` })))));
+        ...(c.comments || []).map(cm => h("div", { class: "s", style: "color:var(--ink)", text: `💬 ${cm.by}: ${cm.text}` }))),
+      h("button", { class: "ghost danger", text: "🗑 Удалить", onclick: async () => {
+        if (!confirm(`Удалить заявку №${c.number}? Получатель увидит, что она отозвана.`)) return;
+        try { await api("DELETE", "/api/claims/" + c.id); toast("Заявка удалена"); viewClaims(kind); } catch (e) { toast(e.message); }
+      } })));
   }
   page(T.title, `Передайте заявку ${T.to} — статус «в работе» и «решена» появится здесь и придёт руководителю.`,
     form, h("div", { class: "row", style: "margin-bottom:18px" }, send,
