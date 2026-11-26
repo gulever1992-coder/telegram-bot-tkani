@@ -56,6 +56,7 @@ _bg: set[asyncio.Task] = set()
 def configure(admin_bot: Bot | None) -> None:
     global _admin_bot
     _admin_bot = admin_bot
+    profiles.on_backup_change = _changed
 
 
 def enabled() -> bool:
@@ -209,6 +210,8 @@ def _dump() -> bytes:
     lines.append(json.dumps({"_settings": SETTINGS}, ensure_ascii=False))
     if CLAIMS:
         lines.append(json.dumps({"_claims": CLAIMS}, ensure_ascii=False))
+    if profiles.BACKUP:
+        lines.append(json.dumps({"_profiles": profiles.BACKUP}, ensure_ascii=False))
     return "\n".join(lines).encode("utf-8")
 
 
@@ -269,6 +272,8 @@ async def load() -> int:
                     SETTINGS.update(obj["_settings"])
                 elif "_claims" in obj:
                     CLAIMS.update(obj["_claims"])
+                elif "_profiles" in obj:
+                    profiles.BACKUP.update(obj["_profiles"])
                 else:
                     loaded.append(obj)
         EVENTS[:0] = loaded

@@ -59,6 +59,20 @@ def parse(text: str) -> dict | None:
     return profile if profile.get("name") else None
 
 
+# Резервная копия профилей (без msg_id): хранится в служебном журнале админ-бота (analytics).
+# Нужна, если закреп потерялся: пользователь закрепил другое сообщение, открепил, очистил историю.
+BACKUP: dict[str, dict] = {}
+on_backup_change = None  # analytics подставляет сюда функцию сохранения журнала
+
+
+def _backup(uid: int, profile: dict) -> None:
+    clean = {k: profile.get(k) or "" for k, _ in FIELDS}
+    if BACKUP.get(str(uid)) != clean:
+        BACKUP[str(uid)] = clean
+        if on_backup_change:
+            on_backup_change()
+
+
 def get(uid: int) -> dict | None:
     """Профиль из памяти (после load)."""
     return _cache.get(uid)
@@ -96,15 +110,20 @@ async def _write(bot: Bot, uid: int, text: str, message_id: int | None) -> int:
 async def load(bot: Bot, uid: int) -> dict | None:
     if uid in _cache:
         return _cache[uid]
+    saved = BACKUP.get(str(uid))
     try:
         found = await _read(bot, uid)
     except TelegramAPIError:
-        return None  # временная ошибка — не запоминаем, попробуем в следующий раз
+        # временная ошибка Telegram — не выкидываем человека на регистрацию (и не запоминаем)
+        return dict(saved) if saved else {"_temp": True}
     profile = None
     if found:
         profile = parse(found[0])
         if profile:
             profile["msg_id"] = found[1]
+            _backup(uid, profile)
+    if profile is None and saved and saved.get("name"):
+        profile = dict(saved)  # закреп потерялся — берём из резервной копии
     _cache[uid] = profile
     return profile
 
@@ -112,6 +131,7 @@ async def load(bot: Bot, uid: int) -> dict | None:
 async def save(bot: Bot, uid: int, profile: dict) -> dict:
     old = _cache.get(uid) or {}
     profile = {k: (profile.get(k) or "") for k, _ in FIELDS}
+    _backup(uid, profile)
     profile["msg_id"] = await _write(bot, uid, render(profile), old.get("msg_id"))
     _cache[uid] = profile
     return profile
