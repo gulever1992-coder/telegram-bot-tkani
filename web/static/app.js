@@ -143,7 +143,8 @@ const ROUTES = [
   ["delivery", "🚚", "Стоимость доставки", viewDelivery],
   ["docs", "📝", "Возврат и пени", viewDocs],
   ["payout", "💵", "Выплата дизайнеру", viewPayout],
-  ["claims", "📣", "Рекламации", viewClaims],
+  ["claims", "📣", "Рекламации", () => viewClaims("claim")],
+  ["logist", "📦", "Запрос логисту", () => viewClaims("log")],
   ["fabrics", "🔎", "Найти ткань", viewFabrics],
   ["tag", "🏷", "Ценник", viewTag],
   ["deals", "📈", "Планируемые продажи", viewDeals],
@@ -749,28 +750,39 @@ async function viewPayout() {
 // Рекламации
 // =================================================================================================
 
-const CLM = local.get("claim") || { order: "", client: "", client_phone: "", item: "", problem: "", photos: [] };
-const clmSave = () => local.set("claim", CLM);
+const CLM_EMPTY = () => ({ order: "", client: "", client_phone: "", item: "", problem: "", photos: [] });
+const CLM_KEY = { claim: "claim", log: "claim_log" };
+const CLM_DRAFT = { claim: local.get("claim") || CLM_EMPTY(), log: local.get("claim_log") || CLM_EMPTY() };
+let CLM_KIND = "claim", CLM = CLM_DRAFT.claim;
+const clmSave = () => local.set(CLM_KEY[CLM_KIND], CLM);
 const CLM_STATUS = { new: ["🆕 Новая", ""], work: ["🛠 В работе", ""], done: ["✅ Решена", "ok"] };
+const CLM_TXT = {
+  claim: { route: "claims", title: "Рекламации", to: "рекламационисту", who: "рекламационист", icon: "📣",
+    item: "Изделие: модель, ткань, цвет *", main: "Проблема: что не так, когда обнаружили *" },
+  log: { route: "logist", title: "Запрос логисту", to: "логисту", who: "логист", icon: "📦",
+    item: "Адрес доставки: город, улица, дом, подъезд, этаж, лифт *", main: "Что нужно: доставка, сроки, забор, перенос даты, вопрос *" },
+};
 
-async function viewClaims() {
-  const d = await api("GET", "/api/claims");
-  const rec = d.recipients.length ? d.recipients.join(", ") : "руководителю (рекламационист пока не назначен)";
+async function viewClaims(kind = CLM_KIND) {
+  CLM_KIND = kind; CLM = CLM_DRAFT[kind];
+  const T = CLM_TXT[kind];
+  const d = await api("GET", "/api/claims?kind=" + kind);
+  const rec = d.recipients.length ? d.recipients.join(", ") : `руководителю (${T.who} пока не назначен)`;
   const form = h("div", { class: "card" },
     h("span", { class: "label", text: "Новая заявка" }),
     field("Договор / заказ клиента *", input(CLM.order, v => { CLM.order = v; clmSave(); }), { key: "order" }),
     h("div", { class: "grid2" },
       field("ФИО клиента *", input(CLM.client, v => { CLM.client = v; clmSave(); }), { key: "client" }),
       field("Телефон клиента *", input(CLM.client_phone, v => { CLM.client_phone = v; clmSave(); }, { type: "tel", placeholder: "+7 999 123-45-67" }), { key: "client_phone" })),
-    field("Изделие: модель, ткань, цвет *", input(CLM.item, v => { CLM.item = v; clmSave(); }), { key: "item" }),
-    field("Проблема: что не так, когда обнаружили *", h("textarea", { value: CLM.problem, oninput: e => { CLM.problem = e.target.value; clmSave(); } }), { key: "problem" }),
+    field(T.item, input(CLM.item, v => { CLM.item = v; clmSave(); }), { key: "item" }),
+    field(T.main, h("textarea", { value: CLM.problem, oninput: e => { CLM.problem = e.target.value; clmSave(); } }), { key: "problem" }),
     clmPhotos(),
     h("p", { class: "muted", style: "font-size:13px", text: "Заявка уйдёт: " + rec + ". Руководитель получает копию." }));
-  const send = h("button", { text: "📣 Передать рекламационисту", onclick: () => busy(send, async () => {
+  const send = h("button", { text: `${T.icon} Передать ${T.to}`, onclick: () => busy(send, async () => {
     try {
-      await api("POST", "/api/claims", CLM);
-      Object.assign(CLM, { order: "", client: "", client_phone: "", item: "", problem: "", photos: [] }); clmSave();
-      toast("Заявка передана. Статус появится ниже."); viewClaims();
+      await api("POST", "/api/claims", { ...CLM, kind });
+      Object.assign(CLM, CLM_EMPTY()); clmSave();
+      toast("Заявка передана. Статус появится ниже."); viewClaims(kind);
     } catch (e) { if (e.data && e.data.errors) { showErrors(form, e.data.errors); toast("Проверьте поля, отмеченные красным"); } throw e; }
   }).catch(() => {}) });
 
@@ -786,15 +798,15 @@ async function viewClaims() {
         ...(c.log || []).map(l => h("div", { class: "s", text: `${CLM_STATUS[l.status][0]} — ${l.by}, ${fmtTs(l.ts)}` })),
         ...(c.comments || []).map(cm => h("div", { class: "s", style: "color:var(--ink)", text: `💬 ${cm.by}: ${cm.text}` })))));
   }
-  page("Рекламации", "Передайте заявку рекламационисту — статус «в работе» и «решена» появится здесь и придёт руководителю.",
+  page(T.title, `Передайте заявку ${T.to} — статус «в работе» и «решена» появится здесь и придёт руководителю.`,
     form, h("div", { class: "row", style: "margin-bottom:18px" }, send,
-      h("button", { class: "ghost", text: "Очистить форму", onclick: () => { if (confirm("Очистить форму?")) { Object.assign(CLM, { order: "", client: "", client_phone: "", item: "", problem: "", photos: [] }); clmSave(); viewClaims(); } } })),
+      h("button", { class: "ghost", text: "Очистить форму", onclick: () => { if (confirm("Очистить форму?")) { Object.assign(CLM, CLM_EMPTY()); clmSave(); viewClaims(kind); } } })),
     h("h3", { text: "Мои заявки" }), list);
   const timer = setInterval(async () => {  // статусы обновляются сами, пока страница открыта
-    if (S.route !== "claims") { clearInterval(timer); return; }
+    if (S.route !== T.route) { clearInterval(timer); return; }
     try {
-      const fresh = await api("GET", "/api/claims");
-      if (JSON.stringify(fresh.items) !== JSON.stringify(d.items) && !document.activeElement.matches("input,textarea")) { clearInterval(timer); viewClaims(); }
+      const fresh = await api("GET", "/api/claims?kind=" + kind);
+      if (JSON.stringify(fresh.items) !== JSON.stringify(d.items) && !document.activeElement.matches("input,textarea")) { clearInterval(timer); viewClaims(kind); }
     } catch (e) { clearInterval(timer); }
   }, 30000);
 }

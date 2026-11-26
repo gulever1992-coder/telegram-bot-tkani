@@ -88,26 +88,35 @@ async def cmd_start(message: types.Message) -> None:
         return
     parts = (message.text or "").split(maxsplit=1)
     arg = parts[1].strip() if len(parts) > 1 else ""
-    if arg.startswith("rec_"):  # ссылка-приглашение рекламациониста от владельца
-        await _join_recipient(message, arg[4:])
+    if arg[:4] in ("rec_", "log_"):  # ссылка-приглашение рекламациониста / логиста от владельца
+        await _join_recipient(message, arg[4:], "claim" if arg.startswith("rec_") else "log")
         return
     if not _allowed(message.from_user):
         if _is_recipient(message.from_user.id):
-            await message.answer(REC_HELLO)
+            await message.answer(_hello(message.from_user.id))
         else:
             await message.answer("Доступ закрыт.")
         return
     await message.answer("👋 <b>Creatica · панель владельца</b>\n" + HELP, reply_markup=reply_menu())
 
 
-REC_HELLO = ("👋 Вы подключены как <b>рекламационист</b> Creatica.\n"
-             "Заявки от менеджеров будут приходить сюда. Под каждой заявкой кнопки: "
-             "«🛠 Взял в работу» и «✅ Решена» — менеджер и руководитель получат отбивку.")
+HELLO = {
+    "claim": ("👋 Вы подключены как <b>рекламационист</b> Creatica.\n"
+              "Заявки от менеджеров будут приходить сюда. Под каждой заявкой кнопки: "
+              "«🛠 Взял в работу» и «✅ Решена» — менеджер и руководитель получат отбивку."),
+    "log": ("👋 Вы подключены как <b>логист</b> Creatica.\n"
+            "Запросы от менеджеров (доставка, сроки, забор) будут приходить сюда. Под каждым запросом кнопки: "
+            "«🛠 Взял в работу» и «✅ Решена» — менеджер и руководитель получат отбивку."),
+}
+
+
+def _hello(uid: int) -> str:
+    return "\n\n".join(HELLO[k] for k in claims.KINDS if _is_recipient(uid, k)) or HELLO["claim"]
 
 
 async def _guard(message: types.Message) -> bool:
     if not _allowed(message.from_user):
-        await message.answer(REC_HELLO if _is_recipient(message.from_user.id) else "Доступ закрыт.")
+        await message.answer(_hello(message.from_user.id) if _is_recipient(message.from_user.id) else "Доступ закрыт.")
         return False
     return True
 
@@ -479,28 +488,30 @@ async def cb_status_files(call: types.CallbackQuery) -> None:
 # --- рекламации: кому приходят, кнопки «в работе / решена», отбивки ---------------------------------
 
 
-def _recipients() -> list[dict]:
-    return analytics.SETTINGS.setdefault("rec_users", [])
+def _recipients(kind: str = "claim") -> list[dict]:
+    return analytics.SETTINGS.setdefault(claims.KINDS[kind]["users"], [])
 
 
-def _is_recipient(uid: int) -> bool:
-    return any(u["id"] == uid for u in _recipients())
+def _is_recipient(uid: int, kind: str | None = None) -> bool:
+    kinds = [kind] if kind else list(claims.KINDS)
+    return any(u["id"] == uid for k in kinds for u in _recipients(k))
 
 
 def _can_act(user: types.User | None) -> bool:
     return bool(user) and (_allowed(user) or _is_recipient(user.id))
 
 
-def claim_chats() -> list[int]:
-    """Кому уходит заявка: рекламационисты + владельцы (владелец получает всё)."""
-    return [u["id"] for u in _recipients()] + list(config.ADMIN_CHAT_IDS)
+def claim_chats(kind: str = "claim") -> list[int]:
+    """Кому уходит заявка: рекламационисты (или логисты) + владельцы (владелец получает всё)."""
+    return [u["id"] for u in _recipients(kind)] + list(config.ADMIN_CHAT_IDS)
 
 
 async def push_recipients() -> None:
     """Сообщить сайту, кому слать заявки с сайта (сайт — отдельная программа, сам этого не знает)."""
     if config.ADMIN_BOT_TOKEN:
         await claims.web_call(config.ADMIN_BOT_TOKEN, "/internal/recipients",
-                              {"users": _recipients(), "owners": list(config.ADMIN_CHAT_IDS)})
+                              {"users": _recipients("claim"), "log_users": _recipients("log"),
+                               "owners": list(config.ADMIN_CHAT_IDS)})
 
 
 async def sync_loop() -> None:
@@ -523,36 +534,45 @@ async def _owners_say(bot: Bot, text: str, skip: int | None = None) -> None:
             pass
 
 
-async def _join_recipient(message: types.Message, token: str) -> None:
-    tokens = analytics.SETTINGS.setdefault("rec_tokens", {})
+async def _join_recipient(message: types.Message, token: str, kind: str = "claim") -> None:
+    k = claims.KINDS[kind]
+    tokens = analytics.SETTINGS.setdefault(k["tokens"], {})
     ts = tokens.get(token)
     if ts is None or time.time() - ts > 3 * 86400:
         await message.answer("Эта ссылка недействительна или устарела. Попросите руководителя прислать новую.")
         return
     tokens.pop(token, None)
     user = message.from_user
-    if not _is_recipient(user.id):
-        _recipients().append({"id": user.id, "name": user.full_name, "username": user.username or ""})
+    if not _is_recipient(user.id, kind):
+        _recipients(kind).append({"id": user.id, "name": user.full_name, "username": user.username or ""})
     analytics.save_state()
-    await message.answer(REC_HELLO)
-    await _owners_say(message.bot, f"✅ Рекламационист подключён: <b>{escape(user.full_name)}</b>"
+    await message.answer(HELLO[kind])
+    await _owners_say(message.bot, f"✅ Подключён {k['who']}: <b>{escape(user.full_name)}</b>"
                                    + (f" (@{escape(user.username)})" if user.username else ""))
     asyncio.create_task(push_recipients())
 
 
+CFG_HEAD = {"claim": "📣 <b>Рекламации — кому приходят заявки от менеджеров:</b>",
+            "log": "📦 <b>Логистика — кому приходят запросы логисту:</b>"}
+
+
 def _cfg_view() -> tuple[str, types.InlineKeyboardMarkup]:
-    users = _recipients()
-    lines = ["⚙ <b>Настройки</b>", "", "📣 <b>Рекламации — кому приходят заявки от менеджеров:</b>"]
-    lines += [f"• {escape(u['name'])}" + (f" (@{escape(u['username'])})" if u.get("username") else "") for u in users] \
-        or ["пока никому — заявки приходят только вам"]
-    lines += ["", "Вы в любом случае получаете копию каждой заявки и каждой отбивки (взяли в работу / решена)."]
+    lines = ["⚙ <b>Настройки</b>"]
     b = InlineKeyboardBuilder()
-    for u in users:
-        b.row(InlineKeyboardButton(text=f"❌ Убрать: {u['name'][:30]}", callback_data=f"a:cfg:del:{u['id']}"))
-    b.row(InlineKeyboardButton(text="➕ Пригласить рекламациониста (ссылка)", callback_data="a:cfg:inv"))
     me = config.ADMIN_CHAT_IDS[0] if config.ADMIN_CHAT_IDS else None
-    if me and not _is_recipient(me):
-        b.row(InlineKeyboardButton(text="➕ Добавить себя", callback_data="a:cfg:me"))
+    for kind, k in claims.KINDS.items():
+        users = _recipients(kind)
+        lines += ["", CFG_HEAD[kind]]
+        lines += [f"• {escape(u['name'])}" + (f" (@{escape(u['username'])})" if u.get("username") else "")
+                  for u in users] or ["пока никому — заявки приходят только вам"]
+        for u in users:
+            b.row(InlineKeyboardButton(text=f"❌ Убрать ({k['who']}): {u['name'][:26]}",
+                                       callback_data=f"a:cfg:del:{kind}:{u['id']}"))
+        row = [InlineKeyboardButton(text=f"➕ Пригласить: {k['who']}", callback_data=f"a:cfg:inv:{kind}")]
+        if me and not _is_recipient(me, kind):
+            row.append(InlineKeyboardButton(text="➕ Себя", callback_data=f"a:cfg:me:{kind}"))
+        b.row(*row)
+    lines += ["", "Вы в любом случае получаете копию каждой заявки и каждой отбивки (взяли в работу / решена)."]
     return "\n".join(lines), b.as_markup()
 
 
@@ -563,23 +583,27 @@ async def cb_cfg(call: types.CallbackQuery) -> None:
         return
     parts = call.data.split(":")
     action = parts[2]
+    rest = parts[3:]
+    kind = rest.pop(0) if rest and rest[0] in claims.KINDS else "claim"  # старые кнопки — без вида
+    k = claims.KINDS[kind]
     if action == "inv":
         token = secrets.token_urlsafe(8)
-        analytics.SETTINGS.setdefault("rec_tokens", {})[token] = int(time.time())
+        analytics.SETTINGS.setdefault(k["tokens"], {})[token] = int(time.time())
         analytics.save_state()
         me = await call.bot.me()
+        prefix = "rec" if kind == "claim" else "log"
         await call.message.answer(
-            "🔗 <b>Ссылка для рекламациониста</b> (одноразовая, действует 3 дня):\n"
-            f"https://t.me/{me.username}?start=rec_{token}\n\n"
+            f"🔗 <b>Ссылка для: {k['who']}</b> (одноразовая, действует 3 дня):\n"
+            f"https://t.me/{me.username}?start={prefix}_{token}\n\n"
             "Перешлите её сотруднику: он откроет ссылку, нажмёт «Старт» — и заявки пойдут ему.")
         await call.answer()
         return
     if action == "me":
         user = call.from_user
-        if not _is_recipient(user.id):
-            _recipients().append({"id": user.id, "name": user.full_name, "username": user.username or ""})
-    elif action == "del":
-        analytics.SETTINGS["rec_users"] = [u for u in _recipients() if u["id"] != int(parts[3])]
+        if not _is_recipient(user.id, kind):
+            _recipients(kind).append({"id": user.id, "name": user.full_name, "username": user.username or ""})
+    elif action == "del" and rest:
+        analytics.SETTINGS[k["users"]] = [u for u in _recipients(kind) if u["id"] != int(rest[0])]
     analytics.save_state()
     asyncio.create_task(push_recipients())
     text, markup = _cfg_view()
@@ -641,10 +665,11 @@ async def cb_claim(call: types.CallbackQuery) -> None:
     await claims.refresh(call.bot, c)
     n = claims.number(c)
     order = claims.esc(c.get("order"))
+    title = claims.kind(c)["title"]
     if status == "work":
-        msg = f"🛠 <b>Рекламация №{n} взята в работу</b>\nЗаказ: {order}\nЗаявку ведёт: {claims.esc(actor)}"
+        msg = f"🛠 <b>{title} №{n} — взято в работу</b>\nЗаказ: {order}\nЗаявку ведёт: {claims.esc(actor)}"
     else:
-        msg = f"✅ <b>Рекламация №{n} решена</b>\nЗаказ: {order}\nОтметил: {claims.esc(actor)}"
+        msg = f"✅ <b>{title} №{n} — решено</b>\nЗаказ: {order}\nОтметил: {claims.esc(actor)}"
     await claims.notify_requester(c, msg)  # менеджеру, который подал заявку
     await _owners_say(call.bot, msg + f"\nМенеджер: {claims.esc((c.get('by') or {}).get('name'))}", skip=call.from_user.id)
     PENDING_COMMENT[call.from_user.id] = (cid, time.time())
@@ -693,22 +718,24 @@ async def msg_claim_comment(message: types.Message) -> None:
         await message.answer("Заявка не найдена.")
         return
     await claims.refresh(message.bot, c)
-    out = (f"💬 <b>Комментарий по рекламации №{claims.number(c)}</b> ({claims.esc(actor)}):\n{claims.esc(text)}")
+    out = (f"💬 <b>Комментарий {claims.kind(c)['of']} №{claims.number(c)}</b> ({claims.esc(actor)}):\n{claims.esc(text)}")
     await claims.notify_requester(c, out)
     await _owners_say(message.bot, out, skip=message.from_user.id)
     await message.answer("✔ Комментарий отправлен менеджеру и руководителю.")
 
 
-async def claims_report() -> tuple[str, types.InlineKeyboardMarkup]:
+async def claims_report(kind: str = "claim") -> tuple[str, types.InlineKeyboardMarkup]:
+    k = claims.KINDS[kind]
     items = list(analytics.CLAIMS.values())
     res = await claims.web_call(config.ADMIN_BOT_TOKEN, "/internal/claims", {})
     if res and res.get("claims"):
         items += res["claims"]
+    items = [c for c in items if claims.kind_of(c) == kind]
     items.sort(key=lambda c: -c["ts"])
     cnt = Counter(c["status"] for c in items)
     if not items:
-        return "📣 Рекламаций пока не было.", types.InlineKeyboardMarkup(inline_keyboard=[])
-    lines = [f"📣 <b>Рекламации</b>: 🆕 {cnt['new']} · 🛠 {cnt['work']} · ✅ {cnt['done']}"
+        return f"{k['icon']} {k['plural']}: пока ни одной заявки.", types.InlineKeyboardMarkup(inline_keyboard=[])
+    lines = [f"{k['icon']} <b>{k['plural']}</b>: 🆕 {cnt['new']} · 🛠 {cnt['work']} · ✅ {cnt['done']}"
              + ("" if res is not None else "\n<i>(сайт не ответил — заявки с сайта не показаны)</i>")]
     b = InlineKeyboardBuilder()
     for c in items[:15]:
@@ -742,14 +769,15 @@ ADMIN_MENU = [
     ("🕒 Лента действий", "feed"), ("📈 По дням", "days"),
     ("📅 Период отчётов", "period"), ("🌅 Сводка за вчера", "digest"),
     ("📂 КП менеджера: статусы", "status"), ("📣 Рекламации", "claims"),
-    ("⚙ Настройки", "settings"), ("ℹ Помощь", "help"),
+    ("📦 Логистика", "logist"), ("⚙ Настройки", "settings"),
+    ("ℹ Помощь", "help"),
 ]
 ADMIN_TEXT = dict(ADMIN_MENU)
 PERIOD: dict[int, str] = {}  # выбранный период отчётов у каждого владельца
 
 
 def reply_menu() -> types.ReplyKeyboardMarkup:
-    rows = [[types.KeyboardButton(text=a[0]), types.KeyboardButton(text=b[0])] for a, b in zip(ADMIN_MENU[::2], ADMIN_MENU[1::2])]
+    rows = [[types.KeyboardButton(text=t) for t, _ in ADMIN_MENU[i:i + 2]] for i in range(0, len(ADMIN_MENU), 2)]
     return types.ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True, is_persistent=True,
                                      input_field_placeholder="Выберите отчёт или напишите слово для поиска КП")
 
@@ -770,8 +798,8 @@ async def on_admin_button(message: types.Message) -> None:
     elif kind == "status":
         text, markup = _status_picker()
         await message.answer(text, reply_markup=markup)
-    elif kind == "claims":
-        text, markup = await claims_report()
+    elif kind in ("claims", "logist"):
+        text, markup = await claims_report("claim" if kind == "claims" else "log")
         await message.answer(text, reply_markup=markup)
     elif kind == "settings":
         text, markup = _cfg_view()

@@ -34,6 +34,25 @@ WEB_BASE = (os.getenv("WEB_BASE_URL") or "https://creatica-web.onrender.com").rs
 main_bot: Bot | None = None
 
 
+# Виды заявок: рекламация и запрос логисту — устроены одинаково, различаются текстами и получателями.
+KINDS = {
+    "claim": {"icon": "📣", "title": "Рекламация", "plural": "Рекламации", "of": "по рекламации",
+              "who": "рекламационист", "to": "рекламационисту", "users": "rec_users", "tokens": "rec_tokens",
+              "item": "Изделие", "main": "Проблема"},
+    "log": {"icon": "📦", "title": "Запрос логисту", "plural": "Запросы логисту", "of": "по запросу логисту",
+            "who": "логист", "to": "логисту", "users": "log_users", "tokens": "log_tokens",
+            "item": "Адрес доставки", "main": "Запрос"},
+}
+
+
+def kind_of(c: dict) -> str:
+    return c.get("kind") if c.get("kind") in KINDS else "claim"
+
+
+def kind(c: dict) -> dict:
+    return KINDS[kind_of(c)]
+
+
 def esc(x) -> str:
     return html.escape(str(x or ""))
 
@@ -49,16 +68,17 @@ def _when(ts: int) -> str:
 
 def claim_text(c: dict) -> str:
     by = c.get("by") or {}
+    k = kind(c)
     src = " · с сайта" if c["id"].startswith("w") else ""
     lines = [
-        f"📣 <b>Рекламация №{number(c)}</b> · {STATUS[c['status']]}",
+        f"{k['icon']} <b>{k['title']} №{number(c)}</b> · {STATUS[c['status']]}",
         f"👤 Менеджер: {esc(by.get('name') or '—')}" + (f" · {esc(by['showroom'])}" if by.get("showroom") else "") + src,
         "",
         f"Договор / заказ: <b>{esc(c.get('order'))}</b>",
         f"Клиент: {esc(c.get('client'))}" + (f", {esc(c['client_phone'])}" if c.get("client_phone") else ""),
-        f"Изделие: {esc(c.get('item'))}",
+        f"{k['item']}: {esc(c.get('item'))}",
         "",
-        "<b>Проблема:</b>",
+        f"<b>{k['main']}:</b>",
         esc(c.get("problem")),
     ]
     if c.get("photos_n"):
@@ -101,7 +121,7 @@ def add_comment(c: dict, by: str, text: str) -> None:
 
 def short_line(c: dict) -> str:
     by = c.get("by") or {}
-    return (f"{STATUS[c['status']]} №{number(c)} · {esc(c.get('order'))} · {esc(c.get('client'))} · "
+    return (f"{STATUS[c['status']]} {kind(c)['icon']} №{number(c)} · {esc(c.get('order'))} · {esc(c.get('client'))} · "
             f"{esc(by.get('name'))}, {_when(c['ts'])}")
 
 

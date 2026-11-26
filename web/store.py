@@ -32,7 +32,7 @@ MSK = dt.timezone(dt.timedelta(hours=3))
 
 
 def _empty() -> dict:
-    return {"users": {}, "drafts": {}, "kp": {}, "deals": {}, "seq": 0, "claims": {}, "rec_users": [], "claim_seq": 0}
+    return {"users": {}, "drafts": {}, "kp": {}, "deals": {}, "seq": 0, "claims": {}, "rec_users": [], "log_users": [], "claim_seq": 0}
 
 
 def _caption() -> str:

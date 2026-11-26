@@ -74,6 +74,7 @@ async def on_menu_button(message: types.Message, state: FSMContext) -> None:
         "delivery": delivery_flow.cb_delivery,
         "cards": company_flow.cb_cards,
         "claim": claim_flow.cb_claim,
+        "logist": claim_flow.cb_logist,
         "profile": onboarding.cb_profile,
     }
     await handlers[key](call, state)

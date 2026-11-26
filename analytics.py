@@ -32,6 +32,7 @@ KINDS = {
     "card": "🏢 Карточка организации",
     "penalty": "⚖ Выплата пени",
     "claim": "📣 Рекламации",
+    "logist": "📦 Запросы логисту",
     "refund": "📝 Возвраты",
     "payout": "💵 Выплаты дизайнерам",
     "search": "🔎 Поиск ткани",
@@ -43,7 +44,7 @@ KINDS = {
 EVENTS: list[dict] = []
 DRAFTS: dict[str, dict] = {}  # черновики КП по uid — хранятся в том же журнале, переживают перезапуск
 # настройки владельца (кому приходят рекламации и т. п.) и заявки по рекламациям — там же
-SETTINGS: dict = {"rec_users": [], "rec_tokens": {}, "claim_seq": 0}
+SETTINGS: dict = {"rec_users": [], "rec_tokens": {}, "log_users": [], "log_tokens": {}, "claim_seq": 0}
 CLAIMS: dict[str, dict] = {}
 _admin_bot: Bot | None = None
 _store_msg_id: int | None = None
