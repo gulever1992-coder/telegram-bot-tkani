@@ -23,6 +23,7 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 import analytics
 import claims
 import config
+import keyboards as kb
 from analytics import KINDS, MSK, fmt_time, since
 
 router = Router()
@@ -573,7 +574,58 @@ def _cfg_view() -> tuple[str, types.InlineKeyboardMarkup]:
             row.append(InlineKeyboardButton(text="➕ Себя", callback_data=f"a:cfg:me:{kind}"))
         b.row(*row)
     lines += ["", "Вы в любом случае получаете копию каждой заявки и каждой отбивки (взяли в работу / решена)."]
+    b.row(InlineKeyboardButton(text="📋 Порядок кнопок в боте-помощнике", callback_data="a:menu:show"))
     return "\n".join(lines), b.as_markup()
+
+
+def _menu_view() -> tuple[str, types.InlineKeyboardMarkup]:
+    items = kb.menu_items()
+    lines = ["📋 <b>Порядок кнопок в меню бота-помощника</b>",
+             "Меню — две колонки, кнопки идут слева направо, сверху вниз. "
+             "Без прокрутки обычно видно первые 6 рядов (12 кнопок).", ""]
+    b = InlineKeyboardBuilder()
+    for i, (label, key) in enumerate(items):
+        if i % 2 == 0:
+            lines.append(f"<b>Ряд {i // 2 + 1}:</b> " + "  |  ".join(escape(x[0]) for x in items[i:i + 2]))
+        b.row(InlineKeyboardButton(text="⬆", callback_data=f"a:menu:up:{key}"),
+              InlineKeyboardButton(text=label, callback_data="a:menu:nop"),
+              InlineKeyboardButton(text="⬇", callback_data=f"a:menu:down:{key}"))
+    b.row(InlineKeyboardButton(text="↩ Порядок по умолчанию", callback_data="a:menu:reset"))
+    lines += ["", "Сотрудники увидят новый порядок, когда меню обновится: после /start или «🏠 В главное меню»."]
+    return "\n".join(lines), b.as_markup()
+
+
+@router.callback_query(F.data.startswith("a:menu:"))
+async def cb_menu(call: types.CallbackQuery) -> None:
+    if not _allowed(call.from_user):
+        await call.answer("Доступ закрыт", show_alert=True)
+        return
+    parts = call.data.split(":")
+    action = parts[2]
+    if action == "nop":
+        await call.answer("Двигайте кнопками ⬆ / ⬇")
+        return
+    if action == "show":
+        text, markup = _menu_view()
+        await call.message.answer(text, reply_markup=markup)
+        await call.answer()
+        return
+    keys = [key for _, key in kb.menu_items()]
+    if action == "reset":
+        analytics.SETTINGS.pop("menu_order", None)
+    elif action in ("up", "down") and len(parts) > 3 and parts[3] in keys:
+        i = keys.index(parts[3])
+        j = i - 1 if action == "up" else i + 1
+        if 0 <= j < len(keys):
+            keys[i], keys[j] = keys[j], keys[i]
+        analytics.SETTINGS["menu_order"] = keys
+    analytics.save_state()
+    text, markup = _menu_view()
+    try:
+        await call.message.edit_text(text, reply_markup=markup)
+    except Exception:  # noqa: BLE001
+        pass
+    await call.answer("Готово")
 
 
 @router.callback_query(F.data.startswith("a:cfg:"))

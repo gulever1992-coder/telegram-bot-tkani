@@ -45,11 +45,23 @@ def is_menu_text(text: str | None) -> bool:
     return (text or "").strip() in MENU_TEXT
 
 
+def menu_items() -> list[tuple[str, str]]:
+    """Пункты меню в порядке, который владелец задал в админ-боте (⚙ Настройки → Порядок меню)."""
+    try:
+        import analytics
+        order = list(analytics.SETTINGS.get("menu_order") or [])
+    except Exception:  # noqa: BLE001
+        order = []
+    pos = {key: i for i, key in enumerate(order)}
+    return sorted(MENU_ITEMS, key=lambda it: (pos.get(it[1], len(order)), MENU_ITEMS.index(it)))
+
+
 def reply_menu() -> ReplyKeyboardMarkup:
     """Постоянное меню под полем ввода: две колонки, всегда на виду."""
-    rows = [list(pair) for pair in zip(MENU_ITEMS[::2], MENU_ITEMS[1::2])]
-    if len(MENU_ITEMS) % 2:
-        rows.append([MENU_ITEMS[-1]])
+    items = menu_items()
+    rows = [list(pair) for pair in zip(items[::2], items[1::2])]
+    if len(items) % 2:
+        rows.append([items[-1]])
     keyboard = [[KeyboardButton(text=item[0]) for item in row] for row in rows]
     return ReplyKeyboardMarkup(keyboard=keyboard, resize_keyboard=True, is_persistent=True,
                                input_field_placeholder="Выберите действие в меню")
